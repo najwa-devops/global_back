@@ -1,0 +1,79 @@
+# Plan Facture Vente
+
+## Objectif
+Séparer complètement le traitement des factures **VENTE** du traitement des factures **ACHAT_FOURNISSEUR** pour éviter les ambiguïtés OCR et fiabiliser la comptabilisation.
+
+## 1. Découpage métier
+- `ACHAT_FOURNISSEUR`: notre entreprise = client, fournisseur = émetteur.
+- `VENTE`: notre entreprise = émetteur, client = acheteur.
+- Garder un comportement par défaut compatible: si doute -> `ACHAT_FOURNISSEUR`.
+
+## 2. Modèle de données
+- Ajouter `invoiceType` dans `dynamic_invoice` (`VENTE`, `ACHAT_FOURNISSEUR`).
+- Ajouter `clientName`, `clientIce`.
+- Ajouter dans `dossiers` l’identité entreprise: `companyName`, `companyIce`, `companyIf`, `companyRc`.
+
+## 3. Architecture applicative
+- Conserver un orchestrateur unique: `DynamicInvoiceProcessingService`.
+- Introduire une stratégie par type:
+  - `SupplierInvoiceProcessor` (logique actuelle)
+  - `SalesInvoiceProcessor` (nouvelle logique vente)
+- Contrat commun:
+  - `process(ocrText, dossierContext, invoice)`
+
+## 4. Détection du type
+- Extraire `headerFirstIce` et `footerLastIce`.
+- Comparer avec `dossier.companyIce`.
+- Règles:
+  1. `footerLastIce == companyIce` -> `VENTE`
+  2. `headerFirstIce == companyIce` -> `ACHAT_FOURNISSEUR`
+  3. sinon -> `ACHAT_FOURNISSEUR`
+- Ajouter `detectionReason` en logs.
+
+## 5. Traitement ACHAT_FOURNISSEUR (inchangé, isolé)
+- Signature fournisseur via footer (IF > ICE > RC).
+- Détection template fournisseur.
+- Liaison `Tier` fournisseur via IF/ICE footer.
+- Calcul montants + validation.
+
+## 6. Traitement VENTE (nouveau flux)
+- Ignorer template fournisseur par défaut.
+- Extraire client depuis header/body:
+  - `clientIce` = premier ICE.
+  - `clientName` = texte voisin du premier ICE.
+- Lier `Tier` client via `clientIce`.
+- Conserver extraction montants/date/numéro.
+
+## 7. API
+- Étendre `POST /api/dynamic-invoices/upload`:
+  - `invoiceType` optionnel (`VENTE` ou `ACHAT_FOURNISSEUR`).
+- Si fourni: prioritaire.
+- Sinon: auto-détection.
+
+## 8. Migration et rollout
+- Phase 1: migration BDD + champs + logs.
+- Phase 2: séparation services + feature flag vente.
+- Phase 3: activation progressive par dossier.
+- Phase 4: suppression du mode legacy.
+
+## 9. Tests
+- Unit tests:
+  - détection type (header/footer)
+  - parsing clientIce/clientName
+  - liaison tier client/fournisseur
+- Integration tests:
+  - upload vente valide
+  - upload achat valide
+  - cas ambigu -> fallback achat
+
+## 10. Critères de succès
+- 0 régression sur flux fournisseur existant.
+- Classification correcte vente/achat > 95% sur échantillon réel.
+- Baisse des `dossier_forbidden` fonctionnels liés à mauvaise nature de facture.
+
+
+# RECOMMANDER
+
+Mon avis: la bonne approche est une **séparation par stratégie métier** (2 processeurs distincts) avec un orchestrateur commun. C’est plus maintenable, testable, et évite de surcharger une seule classe avec des `if` partout.
+
+Priorité absolue: renseigner l’identité entreprise au niveau `Dossier` (`companyIce` en premier). Sans cette donnée, la détection vente/achat restera fragile.

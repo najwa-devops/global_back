@@ -1,0 +1,9 @@
+.git
+.idea
+.vscode
+target
+uploads
+uploads_banking
+logs
+*.log
+.env
