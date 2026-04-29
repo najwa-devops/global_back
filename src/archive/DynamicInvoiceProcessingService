@@ -1,0 +1,616 @@
+package com.invoice_reader.invoice_reader.servises.dynamic;
+
+import com.invoice_reader.invoice_reader.dto.account_tier.TierDto;
+import com.invoice_reader.invoice_reader.entity.dynamic.DynamicInvoice;
+import com.invoice_reader.invoice_reader.entity.dynamic.DynamicTemplate;
+import com.invoice_reader.invoice_reader.entity.account_tier.Tier;
+import com.invoice_reader.invoice_reader.entity.invoice.InvoiceStatus;
+import com.invoice_reader.invoice_reader.entity.template.SignatureType;
+import com.invoice_reader.invoice_reader.entity.template.TemplateSignature;
+import com.invoice_reader.invoice_reader.repository.DynamicInvoiceDao;
+import com.invoice_reader.invoice_reader.servises.account_tier.TierService;
+import com.invoice_reader.invoice_reader.servises.impl.TtcCalculationService;
+import com.invoice_reader.invoice_reader.servises.ocr.OcrService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.PDFRenderer;
+import org.springframework.stereotype.Component;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;import java.io.File;
+import java.io.IOException;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Service de traitement des factures dynamiques
+ * VERSION CORRIGÉE: Détection ICE/IF/RC UNIQUEMENT dans le FOOTER (40% du bas)
+ */
+@Component
+@Slf4j
+@RequiredArgsConstructor
+public class DynamicInvoiceProcessingService {
+
+    private final OcrService ocrService;
+    private final DynamicTemplateService dynamicTemplateService;
+    private final DynamicFieldExtractorService dynamicFieldExtractorService;
+    private final TtcCalculationService ttcCalculationService;
+    private final DynamicInvoiceDao dynamicInvoiceDao;
+    private final TierService tierService;
+
+    // CONFIGURATION: Pourcentage du texte considéré comme footer
+    private static final double FOOTER_PERCENTAGE = 0.80; // 40% du bas = footer
+
+    public DynamicInvoice processInvoice(DynamicInvoice invoice) throws Exception {
+        log.info("=== TRAITEMENT DYNAMIQUE INVOICE {} ===", invoice.getId());
+
+        invoice.startProcessing();
+
+        String filePath = invoice.getFilePath();
+        File file = new File(filePath);
+
+        if (!file.exists()) {
+            invoice.markAsError();
+            throw new RuntimeException("Fichier introuvable: " + filePath);
+        }
+
+        try {
+            // ÉTAPE 1: OCR
+            String ocrText = performOcr(file);
+            invoice.setRawOcrText(ocrText);
+            log.info("OCR termine: {} caracteres", ocrText.length());
+
+            // ÉTAPE 2: DÉTECTION SIGNATURE (FOOTER UNIQUEMENT)
+            TemplateSignature signature = detectSignatureFromFooter(ocrText);
+            invoice.setDetectedSignature(signature);
+            log.info("Signature detectee: {}", signature);
+
+            // ÉTAPE 3: RECHERCHE TEMPLATE
+            Optional<DynamicTemplate> templateOpt = dynamicTemplateService.detectTemplate(ocrText);
+            DynamicTemplate template = templateOpt.orElse(null);
+
+            if (template != null) {
+                invoice.setTemplateId(template.getId());
+                invoice.setTemplateName(template.getTemplateName());
+                log.info("Template trouve: {} (ID={})", template.getTemplateName(), template.getId());
+            } else {
+                log.info("Aucun template dynamique trouve");
+            }
+
+            // ÉTAPE 4: EXTRACTION
+            DynamicExtractionResult extractionResult;
+
+            if (template != null) {
+                extractionResult = dynamicFieldExtractorService.extractWithTemplate(ocrText, template);
+                log.info("Extraction avec template: {} champs, confiance {}%",
+                        extractionResult.getExtractedCount(),
+                        Math.round(extractionResult.getOverallConfidence() * 100));
+            } else {
+                extractionResult = dynamicFieldExtractorService.extractWithoutTemplate(ocrText);
+                log.info("Extraction sans template");
+            }
+
+            // ÉTAPE 5: CONSTRUCTION fieldsData + AUTO-FILL
+            Map<String, Object> fieldsData = new LinkedHashMap<>();
+            Map<String, Object> extractedData = new LinkedHashMap<>();
+            List<String> autoFilledFields = new ArrayList<>();
+
+            // 5a) Champs extraits par regex
+            extractionResult.getExtractedFields().forEach((key, field) -> {
+                fieldsData.put(key, field.getNormalizedValue());
+                extractedData.put(key, Map.of(
+                        "value", field.getValue(),
+                        "normalizedValue", field.getNormalizedValue(),
+                        "confidence", field.getConfidence(),
+                        "detectionMethod", field.getDetectionMethod(),
+                        "validated", field.getValidated()
+                ));
+            });
+
+            log.info("Champs extraits par regex: {}", fieldsData.keySet());
+
+            // 5b) Données fixes du template (ÉCRASENT l'extraction)
+            if (template != null && template.getFixedSupplierData() != null) {
+                DynamicTemplate.FixedSupplierData fixed = template.getFixedSupplierData();
+
+                if (fixed.getIce() != null && !fixed.getIce().isBlank()) {
+                    fieldsData.put("ice", fixed.getIce());
+                    autoFilledFields.add("ice");
+                }
+                if (fixed.getIfNumber() != null && !fixed.getIfNumber().isBlank()) {
+                    fieldsData.put("ifNumber", fixed.getIfNumber());
+                    autoFilledFields.add("ifNumber");
+                }
+                if (fixed.getRcNumber() != null && !fixed.getRcNumber().isBlank()) {
+                    fieldsData.put("rcNumber", fixed.getRcNumber());
+                    autoFilledFields.add("rcNumber");
+                }
+                if (fixed.getSupplier() != null && !fixed.getSupplier().isBlank()) {
+                    fieldsData.put("supplier", fixed.getSupplier());
+                    autoFilledFields.add("supplier");
+                }
+                if (fixed.getAddress() != null && !fixed.getAddress().isBlank()) {
+                    fieldsData.put("address", fixed.getAddress());
+                    autoFilledFields.add("address");
+                }
+                if (fixed.getCity() != null && !fixed.getCity().isBlank()) {
+                    fieldsData.put("city", fixed.getCity());
+                    autoFilledFields.add("city");
+                }
+
+                log.info("Donnees fixes du template appliquees (auto-fill): {}", autoFilledFields);
+            }
+
+            // ÉTAPE 6: LIAISON TIER AUTOMATIQUE
+            linkInvoiceToTier(invoice, fieldsData, autoFilledFields);
+
+            // ÉTAPE 7: CALCUL TTC
+            Double amountHT = extractDouble(fieldsData, "amountHT");
+            Double tva = extractDouble(fieldsData, "tva");
+            Double amountTTC = extractDouble(fieldsData, "amountTTC");
+
+            if (amountHT != null && tva != null) {
+                Map<String, Object> ttcResult = ttcCalculationService.calculateAndValidateTTC(
+                        amountHT, tva, amountTTC
+                );
+
+                Double ttcCalculated = (Double) ttcResult.get("ttcCalculated");
+                fieldsData.put("amountTTC", ttcCalculated);
+
+                log.info("TTC calcule: {} (HT={}, TVA={})", ttcCalculated, amountHT, tva);
+
+                if (Boolean.TRUE.equals(ttcResult.get("hasWarning"))) {
+                    log.warn("TTC warning: {}", ttcResult.get("warningMessage"));
+                }
+            }
+
+            // ÉTAPE 8: MISE À JOUR INVOICE
+            invoice.setFieldsData(fieldsData);
+            invoice.setExtractedData(extractedData);
+            invoice.setMissingFields(extractionResult.getMissingFields());
+            invoice.setLowConfidenceFields(extractionResult.getLowConfidenceFields());
+            invoice.setOverallConfidence(extractionResult.getOverallConfidence());
+            invoice.setAutoFilledFields(autoFilledFields);
+
+            // Déterminer le statut
+            boolean isComplete = extractionResult.isComplete();
+            boolean hasHighConfidence = extractionResult.getOverallConfidence() >= 0.8;
+            boolean hasTierConfig = invoice.getTier() != null && invoice.getTier().hasAccountingConfiguration();
+
+            if (isComplete && hasHighConfidence && hasTierConfig) {
+                invoice.setStatus(InvoiceStatus.READY_TO_VALIDATE);
+            } else {
+                invoice.markAsTreated();
+            }
+
+            // ÉTAPE 9: MÉTRIQUES TEMPLATE
+            if (template != null) {
+                boolean success = extractionResult.isComplete() && extractionResult.getOverallConfidence() >= 0.7;
+                dynamicTemplateService.recordUsage(template.getId(), success);
+            }
+
+            // ÉTAPE 10: AUTO-CRÉATION TEMPLATE
+            if (template == null && extractionResult.getOverallConfidence() >= 0.7) {
+                String extractedIce = (String) fieldsData.get("ice");
+                String extractedIf = (String) fieldsData.get("ifNumber");
+                String extractedRc = (String) fieldsData.get("rcNumber");
+                String extractedSupplier = (String) fieldsData.get("supplier");
+
+                if (extractedIce != null || extractedIf != null) {
+                    try {
+                        DynamicTemplate autoTemplate = dynamicTemplateService.autoCreateTemplate(
+                                extractedIce,
+                                extractedIf,
+                                extractedRc,
+                                extractedSupplier,
+                                null
+                        );
+
+                        if (autoTemplate != null) {
+                            invoice.setTemplateId(autoTemplate.getId());
+                            invoice.setTemplateName(autoTemplate.getTemplateName());
+                            log.info("Template auto-cree: {} (ID={})", autoTemplate.getTemplateName(), autoTemplate.getId());
+                        }
+                    } catch (Exception e) {
+                        log.warn("Impossible de creer automatiquement le template: {}", e.getMessage());
+                    }
+                }
+            }
+
+            // ÉTAPE 11: SAUVEGARDE
+            DynamicInvoice saved = dynamicInvoiceDao.save(invoice);
+
+            log.info("=== TRAITEMENT TERMINE INVOICE {} ===", saved.getId());
+            log.info("Status: {}, Confiance: {}%, Champs: {}/{}",
+                    saved.getStatus(),
+                    Math.round(saved.getOverallConfidence() * 100),
+                    extractionResult.getExtractedCount(),
+                    extractionResult.getExtractedCount() + extractionResult.getMissingCount());
+            log.info("Auto-filled depuis template: {}", autoFilledFields);
+
+            return saved;
+
+        } catch (Exception e) {
+            log.error("Erreur traitement invoice {}: {}", invoice.getId(), e.getMessage(), e);
+            invoice.markAsError();
+            dynamicInvoiceDao.save(invoice);
+            throw e;
+        }
+    }
+
+    // ===================== DÉTECTION SIGNATURE (FOOTER UNIQUEMENT) =====================
+
+    /**
+     * Détecte la signature du fournisseur UNIQUEMENT dans le footer
+     * CRITIQUE: Ignore le header pour éviter de détecter l'ICE du client
+     */
+    private TemplateSignature detectSignatureFromFooter(String text) {
+        log.info("=== DETECTION SIGNATURES DANS LE FOOTER ===");
+
+        String footer = extractFooter(text);
+        log.info("Footer extrait: {} caracteres", footer.length());
+
+        // Extraire TOUTES les signatures
+        String ifNumber = extractIfFromFooter(footer);
+        String ice = extractIceFromFooter(footer);
+        String rc = extractRcFromFooter(footer);
+
+        // Logger toutes les signatures détectées
+        log.info("Signatures detectees:");
+        if (ifNumber != null) log.info("  - IF: {}", ifNumber);
+        if (ice != null) log.info("  - ICE: {}", ice);
+        if (rc != null) log.info("  - RC: {}", rc);
+
+        // Retourner première disponible (pour compatibilité seulement)
+        if (ifNumber != null && ifNumber.matches("\\d{7,10}")) {
+            return new TemplateSignature(SignatureType.IF, ifNumber);
+        }
+
+        if (ice != null && ice.matches("\\d{15}")) {
+            return new TemplateSignature(SignatureType.ICE, ice);
+        }
+
+        log.warn("Aucune signature detectee");
+        return null;
+    }
+
+    /**
+     * Extrait le footer (40% du bas du texte)
+     */
+    private String extractFooter(String text) {
+        if (text == null || text.isEmpty()) {
+            return "";
+        }
+
+        int footerStartIndex = (int) (text.length() * 0.60);
+        String footer = text.substring(footerStartIndex);
+
+        log.debug("=== EXTRACTION FOOTER ===");
+        log.debug("Texte total: {} caracteres", text.length());
+        log.debug("Footer start: {} (60% du debut)", footerStartIndex);
+        log.debug("Footer length: {} caracteres (40% du bas)", footer.length());
+
+        return footer;
+    }
+
+    /**
+     * Extrait l'ICE UNIQUEMENT dans le footer
+     * IMPORTANT: Prend le DERNIER ICE trouvé (= fournisseur, pas client)
+     */
+    private String extractIceFromFooter(String footer) {
+        if (footer == null || footer.isEmpty()) {
+            return null;
+        }
+
+        log.debug("Recherche ICE dans le footer ({} caracteres)", footer.length());
+
+        List<String> allIceFound = new ArrayList<>();
+
+        String[] patterns = {
+                "ICE\\s*[:\\s]+\\s*(\\d{3}[\\s-]?\\d{3}[\\s-]?\\d{3}[\\s-]?\\d{3}[\\s-]?\\d{3})",
+                "ICE\\s*[:\\s]+\\s*(\\d{15})",
+                "I\\.\\s*C\\.\\s*E\\.?\\s*[:\\s]+\\s*(\\d{15})",
+                "ICE[^\\d]{0,10}(\\d{15})"
+        };
+
+        for (String patternStr : patterns) {
+            Pattern pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE);
+            Matcher matcher = pattern.matcher(footer);
+
+            while (matcher.find()) {
+                String ice = matcher.group(1).replaceAll("[\\s-]", "");
+                if (ice.length() == 15 && ice.matches("\\d{15}")) {
+                    allIceFound.add(ice);
+                    log.debug("ICE candidat trouve: {}", ice);
+                }
+            }
+        }
+
+        if (!allIceFound.isEmpty()) {
+            String lastIce = allIceFound.get(allIceFound.size() - 1);
+
+            log.info("=== DETECTION ICE FINALE ===");
+            log.info("Total ICE trouves dans le footer: {}", allIceFound.size());
+
+            if (allIceFound.size() > 1) {
+                log.warn("ATTENTION: Plusieurs ICE detectes:");
+                for (int i = 0; i < allIceFound.size(); i++) {
+                    String ice = allIceFound.get(i);
+                    if (i == allIceFound.size() - 1) {
+                        log.warn("  ICE #{}: {} <- FOURNISSEUR (RETENU)", i + 1, ice);
+                    } else {
+                        log.warn("  ICE #{}: {} <- Possiblement CLIENT (IGNORE)", i + 1, ice);
+                    }
+                }
+            } else {
+                log.info("ICE FOURNISSEUR unique: {}", lastIce);
+            }
+
+            return lastIce;
+        }
+
+        log.debug("Aucun ICE trouve dans le footer");
+        return null;
+    }
+
+    /**
+     * Extrait l'IF UNIQUEMENT dans le footer
+     * IMPORTANT: Prend le DERNIER IF trouvé (= fournisseur, pas client)
+     */
+    private String extractIfFromFooter(String footer) {
+        if (footer == null || footer.isEmpty()) {
+            return null;
+        }
+
+        log.debug("Recherche IF dans le footer ({} caracteres)", footer.length());
+
+        // Patterns pour détecter l'IF
+        String[] patterns = {
+                // Pattern 1: I.F: ou IF: avec espaces/points
+                "I\\.?\\s*F\\.?\\s*[:\\s]+\\s*(\\d{7,10})",
+
+                // Pattern 2: Identifiant Fiscal
+                "Identifiant\\s+Fiscal\\s*[:\\s]+\\s*(\\d{7,10})",
+
+                // Pattern 3: Patente (parfois confondu avec IF)
+                "Patente\\s*[:\\s]+\\s*(\\d{7,10})"
+        };
+
+        List<String> allIfFound = new ArrayList<>();
+
+        for (String patternStr : patterns) {
+            Pattern pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE);
+            Matcher matcher = pattern.matcher(footer);
+
+            while (matcher.find()) {
+                String ifNum = matcher.group(1).replaceAll("\\s+", "");
+                if (ifNum.matches("\\d{7,10}")) {
+                    allIfFound.add(ifNum);
+                    log.debug("IF candidat trouve: {} (pattern: {})", ifNum, patternStr.substring(0, 20));
+                }
+            }
+        }
+
+        if (!allIfFound.isEmpty()) {
+            // Prendre le dernier IF trouvé (au cas où il y en aurait plusieurs)
+            String lastIf = allIfFound.get(allIfFound.size() - 1);
+
+            log.info("=== DETECTION IF FINALE ===");
+            log.info("Total IF trouves dans le footer: {}", allIfFound.size());
+
+            if (allIfFound.size() > 1) {
+                log.warn("ATTENTION: Plusieurs IF detectes:");
+                for (int i = 0; i < allIfFound.size(); i++) {
+                    String ifNum = allIfFound.get(i);
+                    if (i == allIfFound.size() - 1) {
+                        log.warn("  IF #{}: {} <- FOURNISSEUR (RETENU)", i + 1, ifNum);
+                    } else {
+                        log.warn("  IF #{}: {} <- IGNORE", i + 1, ifNum);
+                    }
+                }
+            } else {
+                log.info("IF FOURNISSEUR unique: {}", lastIf);
+            }
+
+            return lastIf;
+        }
+
+        log.debug("Aucun IF trouve dans le footer");
+        return null;
+    }
+
+    /**
+     * Extrait le RC UNIQUEMENT dans le footer
+     */
+    private String extractRcFromFooter(String footer) {
+        if (footer == null || footer.isEmpty()) {
+            return null;
+        }
+
+        log.debug("Recherche RC dans le footer ({} caracteres)", footer.length());
+
+        Pattern pattern = Pattern.compile(
+                "R\\.?\\s*C\\.?\\s*[:\\s]+\\s*(\\d{1,20})",
+                Pattern.CASE_INSENSITIVE
+        );
+
+        Matcher matcher = pattern.matcher(footer);
+
+        String lastRc = null;
+
+        while (matcher.find()) {
+            lastRc = matcher.group(1);
+            log.debug("RC candidat trouve: {}", lastRc);
+        }
+
+        if (lastRc != null) {
+            log.info("RC FOURNISSEUR final: {}", lastRc);
+        } else {
+            log.debug("Aucun RC trouve dans le footer");
+        }
+
+        return lastRc;
+    }
+
+    private String extractSupplier(String text) {
+        if (text == null) return null;
+
+        Pattern pattern = Pattern.compile(
+                "([A-Z][A-Za-z\\s&.,''()-]{2,40}\\s+(?:SARL|SAS|SA|S\\.A\\.R\\.L|S\\.A\\.S|S\\.A))",
+                Pattern.CASE_INSENSITIVE
+        );
+
+        Matcher matcher = pattern.matcher(text);
+        if (matcher.find()) {
+            return matcher.group(1).trim();
+        }
+
+        return null;
+    }
+
+    // ===================== LIAISON TIER =====================
+
+    private void linkInvoiceToTier(DynamicInvoice invoice, Map<String, Object> fieldsData, List<String> autoFilledFields) {
+        log.info("Recherche du Tier pour la facture...");
+
+        String extractedIf = getStringValue(fieldsData, "ifNumber");
+        String extractedIce = getStringValue(fieldsData, "ice");
+
+        Tier tier = null;
+
+        // PRIORITÉ 1: Chercher par IF (plus fiable - unique dans la facture)
+        if (extractedIf != null && !extractedIf.isBlank()) {
+            Optional<TierDto> tierDto = tierService.getTierByIfNumber(extractedIf);
+            if (tierDto.isPresent()) {
+                tier = convertDtoToEntity(tierDto.get());
+                log.info("Tier trouve par IF: {} (IF: {})", tier.getLibelle(), extractedIf);
+            } else {
+                log.warn("Aucun tier trouve avec IF: {}", extractedIf);
+            }
+        }
+
+        // PRIORITÉ 2: Si pas trouvé par IF, chercher par ICE
+        if (tier == null && extractedIce != null && !extractedIce.isBlank()) {
+            Optional<TierDto> tierDto = tierService.getTierByIce(extractedIce);
+            if (tierDto.isPresent()) {
+                tier = convertDtoToEntity(tierDto.get());
+                log.info("Tier trouve par ICE: {} (ICE: {})", tier.getLibelle(), extractedIce);
+            } else {
+                log.warn("Aucun tier trouve avec ICE: {}", extractedIce);
+            }
+        }
+
+        // Si trouvé, lier à la facture
+        if (tier != null) {
+            invoice.setTier(tier);
+            invoice.setTierId(tier.getId());
+            invoice.setTierName(tier.getLibelle());
+
+            // Auto-remplir les comptes comptables
+            if (tier.hasAccountingConfiguration()) {
+                fieldsData.put("tierNumber", tier.getTierNumber());
+                autoFilledFields.add("tierNumber");
+
+                if (tier.getAuxiliaireMode() != null && tier.getAuxiliaireMode()) {
+                    fieldsData.put("collectifAccount", tier.getCollectifAccount());
+                    autoFilledFields.add("collectifAccount");
+                }
+
+                fieldsData.put("chargeAccount", tier.getDefaultChargeAccount());
+                fieldsData.put("tvaAccount", tier.getTvaAccount());
+                fieldsData.put("tvaRate", tier.getDefaultTvaRate());
+
+                autoFilledFields.add("chargeAccount");
+                autoFilledFields.add("tvaAccount");
+                autoFilledFields.add("tvaRate");
+
+                log.info("Comptes comptables auto-remplis depuis le Tier");
+            }
+        } else {
+            log.warn("Aucun Tier trouve pour cette facture (IF: {}, ICE: {})",
+                    extractedIf, extractedIce);
+        }
+    }
+
+    // ===================== OCR =====================
+
+    private String performOcr(File file) throws Exception {
+        String fileName = file.getName().toLowerCase();
+
+        if (fileName.endsWith(".pdf")) {
+            log.info("PDF detecte, conversion en image...");
+            File imageFile = convertPdfToImage(file);
+            try {
+                return ocrService.extractText(imageFile);
+            } finally {
+                if (imageFile != null && imageFile.exists()) {
+                    imageFile.delete();
+                }
+            }
+        } else if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") || fileName.endsWith(".png")) {
+            return ocrService.extractText(file);
+        } else {
+            throw new IllegalArgumentException("Type de fichier non supporte: " + fileName);
+        }
+    }
+
+    private File convertPdfToImage(File pdfFile) throws IOException {
+        try (PDDocument document = PDDocument.load(pdfFile)) {
+            if (document.getNumberOfPages() == 0) {
+                throw new IOException("Le PDF ne contient aucune page");
+            }
+
+            PDFRenderer renderer = new PDFRenderer(document);
+            BufferedImage image = renderer.renderImageWithDPI(0, 300);
+
+            File tempFile = File.createTempFile("invoice_", ".png");
+            ImageIO.write(image, "PNG", tempFile);
+
+            log.info("PDF converti: {}x{} pixels", image.getWidth(), image.getHeight());
+            return tempFile;
+        }
+    }
+
+    // ===================== UTILS =====================
+
+    private Double extractDouble(Map<String, Object> fields, String key) {
+        Object value = fields.get(key);
+        if (value == null) return null;
+
+        if (value instanceof Number) {
+            return ((Number) value).doubleValue();
+        }
+
+        try {
+            String str = value.toString()
+                    .replaceAll("[^0-9,.]", "")
+                    .replace(",", ".");
+            return Double.parseDouble(str);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String getStringValue(Map<String, Object> map, String key) {
+        Object value = map.get(key);
+        return value != null ? value.toString() : null;
+    }
+
+    private Tier convertDtoToEntity(TierDto dto) {
+        return Tier.builder()
+                .id(dto.getId())
+                .auxiliaireMode(dto.getAuxiliaireMode())
+                .tierNumber(dto.getTierNumber())
+                .collectifAccount(dto.getCollectifAccount())
+                .libelle(dto.getLibelle())
+                .ifNumber(dto.getIfNumber())
+                .ice(dto.getIce())
+                .rcNumber(dto.getRcNumber())
+                .defaultChargeAccount(dto.getDefaultChargeAccount())
+                .tvaAccount(dto.getTvaAccount())
+                .defaultTvaRate(dto.getDefaultTvaRate())
+                .active(dto.getActive())
+                .build();
+    }
+}

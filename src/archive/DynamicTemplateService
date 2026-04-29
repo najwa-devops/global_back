@@ -1,0 +1,461 @@
+package com.invoice_reader.invoice_reader.servises.dynamic;
+
+import com.invoice_reader.invoice_reader.dto.dynamic.CreateDynamicTemplateRequest;
+import com.invoice_reader.invoice_reader.dto.dynamic.UpdateDynamicTemplateRequest;
+import com.invoice_reader.invoice_reader.entity.template.SignatureType;
+import com.invoice_reader.invoice_reader.entity.template.TemplateSignature;
+import com.invoice_reader.invoice_reader.entity.dynamic.DynamicTemplate;
+import com.invoice_reader.invoice_reader.entity.dynamic.DynamicTemplate.DynamicFieldDefinitionJson;
+import com.invoice_reader.invoice_reader.entity.dynamic.DynamicTemplate.FixedSupplierData;
+import com.invoice_reader.invoice_reader.repository.DynamicTemplateDao;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Service de gestion des templates dynamiques.
+ */
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class DynamicTemplateService {
+
+    private final DynamicTemplateDao dynamicTemplateDao;
+
+    // ===================== CRUD =====================
+
+    @Transactional
+    public DynamicTemplate createTemplate(CreateDynamicTemplateRequest request) {
+        log.info("Création template dynamique: {}", request.getTemplateName());
+
+        // Validation de la requête
+        request.validate();
+
+        // Récupérer la signature choisie par l'utilisateur
+        SignatureType signatureType = SignatureType.valueOf(request.getSignature().getType().toUpperCase());
+        String signatureValue = request.getSignature().getValue();
+
+        log.info("Signature choisie par l'utilisateur: {} = {}", signatureType, signatureValue);
+
+        // Vérifier si un template existe déjà avec cette signature
+        if (dynamicTemplateDao.existsBySignature(signatureType, signatureValue)) {
+            throw new IllegalArgumentException(
+                    "Un template existe déjà pour cette signature: " +
+                            signatureType + ":" + signatureValue
+            );
+        }
+
+        // Créer le template avec la signature choisie
+        DynamicTemplate template = DynamicTemplate.builder()
+                .templateName(request.getTemplateName())
+                .supplierType(request.getSupplierType())
+                .signature(new TemplateSignature(signatureType, signatureValue))
+                .description(request.getDescription())
+                .createdBy(request.getCreatedBy())
+                .fieldDefinitions(convertFieldDefinitions(request.getFieldDefinitions()))
+                .fixedSupplierData(convertFixedSupplierData(request.getFixedSupplierData()))
+                .active(true)
+                .version(1)
+                .build();
+
+        DynamicTemplate saved = dynamicTemplateDao.save(template);
+
+        log.info("Template créé avec ID={}, signature={}:{}",
+                saved.getId(), signatureType, signatureValue);
+
+        return saved;
+    }
+
+
+    @Transactional
+    public DynamicTemplate updateTemplate(Long id, CreateDynamicTemplateRequest request) {
+        log.info("Mise à jour template ID={}", id);
+
+        DynamicTemplate existing = dynamicTemplateDao.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Template non trouvé: " + id));
+
+        existing.setActive(false);
+        dynamicTemplateDao.save(existing);
+
+        DynamicTemplate newVersion = DynamicTemplate.builder()
+                .templateName(request.getTemplateName())
+                .supplierType(request.getSupplierType())
+                .signature(existing.getSignature())
+                .description(request.getDescription())
+                .createdBy(request.getCreatedBy())
+                .fieldDefinitions(convertFieldDefinitions(request.getFieldDefinitions()))
+                .fixedSupplierData(convertFixedSupplierData(request.getFixedSupplierData()))
+                .active(true)
+                .version(existing.getVersion() + 1)
+                .build();
+
+        DynamicTemplate saved = dynamicTemplateDao.save(newVersion);
+        log.info("Nouvelle version {} créée pour template", saved.getVersion());
+
+        return saved;
+    }
+
+    @Transactional
+    public DynamicTemplate patchTemplate(Long id, UpdateDynamicTemplateRequest request) {
+        log.info("Patch template ID={}", id);
+
+        DynamicTemplate template = dynamicTemplateDao.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Template non trouvé: " + id));
+
+        if (!Boolean.TRUE.equals(template.getActive())) {
+            throw new IllegalArgumentException("Impossible de modifier un template désactivé (ID=" + id + ")");
+        }
+
+        // Appliquer uniquement les champs présents dans la requête
+        if (request.getTemplateName() != null && !request.getTemplateName().isBlank()) {
+            log.info("  templateName: '{}' -> '{}'", template.getTemplateName(), request.getTemplateName());
+            template.setTemplateName(request.getTemplateName());
+        }
+
+        if (request.getSupplierType() != null && !request.getSupplierType().isBlank()) {
+            log.info("  supplierType: '{}' -> '{}'", template.getSupplierType(), request.getSupplierType());
+            template.setSupplierType(request.getSupplierType());
+        }
+
+        if (request.getDescription() != null) {
+            log.info("  description mise à jour");
+            template.setDescription(request.getDescription());
+        }
+
+        if (request.getFieldDefinitions() != null && !request.getFieldDefinitions().isEmpty()) {
+            log.info("  fieldDefinitions: {} champs nouveaux", request.getFieldDefinitions().size());
+            template.setFieldDefinitions(convertFieldDefinitions(request.getFieldDefinitions()));
+        }
+
+        if (request.getFixedSupplierData() != null) {
+            log.info("  fixedSupplierData mise à jour");
+            template.setFixedSupplierData(convertFixedSupplierData(request.getFixedSupplierData()));
+        }
+
+        DynamicTemplate saved = dynamicTemplateDao.save(template);
+        log.info("Template ID={} patché avec succès", id);
+
+        return saved;
+    }
+
+    public Optional<DynamicTemplate> findById(Long id) {
+        return dynamicTemplateDao.findById(id);
+    }
+
+    public Optional<DynamicTemplate> findByIce(String ice) {
+        return dynamicTemplateDao.findByIce(ice);
+    }
+
+    public Optional<DynamicTemplate> findByIfNumber(String ifNumber) {
+        return dynamicTemplateDao.findByIfNumber(ifNumber);
+    }
+
+    public List<DynamicTemplate> findAllActive() {
+        return dynamicTemplateDao.findByActiveTrueOrderByTemplateNameAsc();
+    }
+
+    public List<DynamicTemplate> findBySupplierType(String supplierType) {
+        return dynamicTemplateDao.findBySupplierTypeAndActiveTrue(supplierType);
+    }
+
+    public List<DynamicTemplate> searchByName(String name) {
+        return dynamicTemplateDao.searchByName(name);
+    }
+
+    public List<DynamicTemplate> findReliableTemplates() {
+        return dynamicTemplateDao.findReliableTemplates();
+    }
+
+    @Transactional
+    public void deactivate(Long id) {
+        dynamicTemplateDao.findById(id).ifPresent(template -> {
+            template.setActive(false);
+            dynamicTemplateDao.save(template);
+            log.info("Template {} désactivé", id);
+        });
+    }
+
+    @Transactional
+    public void recordUsage(Long templateId, boolean success) {
+        dynamicTemplateDao.findById(templateId).ifPresent(template -> {
+            template.incrementUsage();
+            if (success) {
+                template.incrementSuccess();
+            }
+            dynamicTemplateDao.save(template);
+        });
+    }
+
+    // ===================== DÉTECTION =====================
+
+    public Optional<DynamicTemplate> detectTemplate(String ocrText) {
+        if (ocrText == null || ocrText.isEmpty()) return Optional.empty();
+
+        // PRIORITÉ 1: Chercher par IF (plus fiable - unique dans la facture)
+        String ifNumber = extractIfNumber(ocrText);
+        if (ifNumber != null) {
+            Optional<DynamicTemplate> byIf = findByIfNumber(ifNumber);
+            if (byIf.isPresent()) {
+                log.debug("Template détecté par IF: {}", ifNumber);
+                return byIf;
+            }
+        }
+
+        // PRIORITÉ 2: Chercher par ICE (fallback si IF absent)
+        String ice = extractIce(ocrText);
+        if (ice != null) {
+            Optional<DynamicTemplate> byIce = findByIce(ice);
+            if (byIce.isPresent()) {
+                log.debug("Template détecté par ICE: {}", ice);
+                return byIce;
+            }
+        }
+
+        log.debug("Aucun template détecté automatiquement");
+        return Optional.empty();
+    }
+
+    private String extractIce(String text) {
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("(?i)ICE\\s*[:.]?\\s*(\\d{15})");
+        java.util.regex.Matcher matcher = pattern.matcher(text);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        pattern = java.util.regex.Pattern.compile("\\b(\\d{15})\\b");
+        matcher = pattern.matcher(text);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return null;
+    }
+
+    private String extractIfNumber(String text) {
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("(?i)I\\.?F\\.?\\s*[:.]?\\s*(\\d{7,10})");
+        java.util.regex.Matcher matcher = pattern.matcher(text);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return null;
+    }
+
+    // ===================== RECHERCHE PAR FOURNISSEUR =====================
+
+    public List<DynamicTemplate> searchBySupplier(String supplierName) {
+        if (supplierName == null || supplierName.isBlank()) return new ArrayList<>();
+        return dynamicTemplateDao.searchBySupplierInFixedData(supplierName);
+    }
+
+    // ===================== AUTO-CRÉATION DE TEMPLATES =====================
+
+    /**
+     * Crée automatiquement un template à partir des données extraites.
+     *
+     * CHANGEMENT : supplierType n'est plus "AUTO".
+     *   → Si supplier est disponible → supplierType = supplier (ex: "EVOLEO SARL")
+     *   → Sinon → supplierType = "UNKNOWN"
+     *
+     * @param ice           ICE du fournisseur (signature prioritaire)
+     * @param ifNumber      IF du fournisseur
+     * @param rcNumber      RC du fournisseur
+     * @param supplier      Nom du fournisseur
+     * @param supplierType  Type de fournisseur (si fourni explicitement, sinon déduit)
+     * @return Le template créé ou existant, ou null si impossible
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public DynamicTemplate autoCreateTemplate(
+            String ice,
+            String ifNumber,
+            String rcNumber,
+            String supplier,
+            String supplierType
+    ) {
+        // Vérifier si un template existe déjà pour cet ICE
+        if (ice != null && !ice.isBlank()) {
+            if (dynamicTemplateDao.existsByIce(ice)) {
+                log.info("Template existe déjà pour ICE={}", ice);
+                return dynamicTemplateDao.findByIce(ice).orElse(null);
+            }
+        }
+
+        // Vérifier par IF si pas d'ICE
+        if ((ice == null || ice.isBlank()) && ifNumber != null && !ifNumber.isBlank()) {
+            if (dynamicTemplateDao.existsByIfNumber(ifNumber)) {
+                log.info("Template existe déjà pour IF={}", ifNumber);
+                return dynamicTemplateDao.findByIfNumber(ifNumber).orElse(null);
+            }
+        }
+
+        // Déterminer la signature (priorité ICE > IF)
+        SignatureType signatureType;
+        String signatureValue;
+
+        if (ice != null && !ice.isBlank() && ice.matches("\\d{15}")) {
+            signatureType = SignatureType.ICE;
+            signatureValue = ice;
+        } else if (ifNumber != null && !ifNumber.isBlank() && ifNumber.matches("\\d{7,10}")) {
+            signatureType = SignatureType.IF;
+            signatureValue = ifNumber;
+        } else {
+            log.warn("Impossible de créer un template: ni ICE ni IF valide (ICE={}, IF={})", ice, ifNumber);
+            return null;
+        }
+
+        // ── CHANGEMENT : déterminer supplierType correctement ──
+        // Priorité :
+        //   1) Si supplierType est fourni explicitement et n'est pas null/blank → on l'utilise
+        //   2) Sinon si supplier est disponible → on utilise le nom du supplier
+        //   3) Sinon → "UNKNOWN"
+        String resolvedSupplierType;
+        if (supplierType != null && !supplierType.isBlank()) {
+            resolvedSupplierType = supplierType;
+        } else if (supplier != null && !supplier.isBlank()) {
+            resolvedSupplierType = supplier;   // ex: "EVOLEO SARL"
+        } else {
+            resolvedSupplierType = "UNKNOWN";
+        }
+
+        // templateName = supplier si disponible, sinon "Template_<signature>"
+        String templateName = (supplier != null && !supplier.isBlank())
+                ? supplier
+                : "Template_" + signatureValue;
+
+        FixedSupplierData fixedData = FixedSupplierData.builder()
+                .ice(ice)
+                .ifNumber(ifNumber)
+                .rcNumber(rcNumber)
+                .supplier(supplier)
+                .build();
+
+        List<DynamicFieldDefinitionJson> defaultFieldDefs = createDefaultFieldDefinitions();
+
+        DynamicTemplate template = DynamicTemplate.builder()
+                .templateName(templateName)
+                .supplierType(resolvedSupplierType)   // ← utilise le supplier au lieu de "AUTO"
+                .signature(new TemplateSignature(signatureType, signatureValue))
+                .description("Template auto-généré pour " + templateName)
+                .createdBy("SYSTEM")
+                .fieldDefinitions(defaultFieldDefs)
+                .fixedSupplierData(fixedData)
+                .active(true)
+                .version(1)
+                .build();
+
+        DynamicTemplate saved = dynamicTemplateDao.save(template);
+        log.info("Template auto-créé: {} (ID={}, signature={}:{})",
+                templateName, saved.getId(), signatureType, signatureValue);
+
+        return saved;
+    }
+
+    // ===================== DÉFINITIONS DE CHAMPS PAR DÉFAUT =====================
+
+    private List<DynamicFieldDefinitionJson> createDefaultFieldDefinitions() {
+        List<DynamicFieldDefinitionJson> fields = new ArrayList<>();
+
+        fields.add(DynamicFieldDefinitionJson.builder()
+                .fieldName("invoiceNumber")
+                .labels(List.of("Facture", "N° Facture", "Invoice"))
+                .regexPattern("(?:Facture|FACTURE|Invoice)\\s*[N°no:]*\\s*([A-Z0-9\\-/]+\\d+)")
+                .fieldType("IDENTIFIER")
+                .detectionMethod("REGEX_BASED")
+                .required(true)
+                .confidenceThreshold(0.7)
+                .searchZone("HEADER")
+                .extractionOrder(1)
+                .build());
+
+        fields.add(DynamicFieldDefinitionJson.builder()
+                .fieldName("invoiceDate")
+                .labels(List.of("Date", "Date facturation"))
+                .regexPattern("(?:Date\\s*(?:de\\s*)?(?:facturation|facture)?)[:\\s]*(\\d{2}[/\\-.]\\d{2}[/\\-.]\\d{4})")
+                .fieldType("DATE")
+                .detectionMethod("REGEX_BASED")
+                .required(true)
+                .confidenceThreshold(0.7)
+                .searchZone("HEADER")
+                .extractionOrder(2)
+                .build());
+
+        fields.add(DynamicFieldDefinitionJson.builder()
+                .fieldName("amountHT")
+                .labels(List.of("Total HT", "Montant HT"))
+                .regexPattern("Total\\s*H\\.?T\\.?\\s*[:\\s]*([\\d\\s]+[,.]\\d{2})")
+                .fieldType("CURRENCY")
+                .detectionMethod("REGEX_BASED")
+                .required(true)
+                .confidenceThreshold(0.7)
+                .searchZone("FOOTER")
+                .extractionOrder(3)
+                .build());
+
+        fields.add(DynamicFieldDefinitionJson.builder()
+                .fieldName("tva")
+                .labels(List.of("TVA", "Total TVA"))
+                .regexPattern("Total\\s*T\\.?V\\.?A\\.?\\s*(?:\\d{1,2}%)?\\s*[:\\s]*([\\d\\s]+[,.]\\d{2})")
+                .fieldType("CURRENCY")
+                .detectionMethod("REGEX_BASED")
+                .required(true)
+                .confidenceThreshold(0.7)
+                .searchZone("FOOTER")
+                .extractionOrder(4)
+                .build());
+
+        fields.add(DynamicFieldDefinitionJson.builder()
+                .fieldName("amountTTC")
+                .labels(List.of("Total TTC", "Net à payer"))
+                .regexPattern("Total\\s*T\\.?T\\.?C\\.?\\s*[:\\s]*([\\d\\s.,]+)")
+                .fieldType("CURRENCY")
+                .detectionMethod("REGEX_BASED")
+                .required(true)
+                .confidenceThreshold(0.7)
+                .searchZone("FOOTER")
+                .extractionOrder(5)
+                .build());
+
+        return fields;
+    }
+
+    // ===================== CONVERSION =====================
+
+    private List<DynamicFieldDefinitionJson> convertFieldDefinitions(List<CreateDynamicTemplateRequest.FieldDefinitionRequest> requests) {
+        if (requests == null) return new ArrayList<>();
+
+        return requests.stream()
+                .map(r -> DynamicFieldDefinitionJson.builder()
+                        .fieldName(r.getFieldName())
+                        .labels(r.getLabels())
+                        .regexPattern(r.getRegexPattern())
+                        .fieldType(r.getFieldType() != null ? r.getFieldType().toUpperCase() : "TEXT")
+                        .detectionMethod(r.getDetectionMethod() != null ? r.getDetectionMethod().toUpperCase() : "HYBRID")
+                        .required(r.getRequired() != null ? r.getRequired() : false)
+                        .confidenceThreshold(r.getConfidenceThreshold() != null ? r.getConfidenceThreshold() : 0.7)
+                        .defaultValue(r.getDefaultValue())
+                        .searchZone(r.getSearchZone() != null ? r.getSearchZone().toUpperCase() : "ALL")
+                        .extractionOrder(r.getExtractionOrder() != null ? r.getExtractionOrder() : 100)
+                        .description(r.getDescription())
+                        .build())
+                .toList();
+    }
+
+    private FixedSupplierData convertFixedSupplierData(CreateDynamicTemplateRequest.FixedSupplierDataRequest request) {
+        if (request == null) return null;
+
+        return FixedSupplierData.builder()
+                .ice(request.getIce())
+                .ifNumber(request.getIfNumber())
+                .rcNumber(request.getRcNumber())
+                .supplier(request.getSupplier())
+                .address(request.getAddress())
+                .phone(request.getPhone())
+                .email(request.getEmail())
+                .city(request.getCity())
+                .postalCode(request.getPostalCode())
+                .build();
+    }
+}
