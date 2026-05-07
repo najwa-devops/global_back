@@ -169,7 +169,9 @@ public class ComptabilisationWorkflowService {
         List<AccountingEntry> entries = new ArrayList<>(context.rows().size());
         List<CptjournalJdbcRepository.CptjournalRow> cptjournalRows = new ArrayList<>(context.rows().size());
         long cptjournalBaseNumero = cptjournalJdbcRepository.findMaxNumero() + 1;
-        for (SimulatedEntry row : context.rows()) {
+        List<SimulatedEntry> rows = context.rows();
+        for (int i = 0; i < rows.size(); i++) {
+            SimulatedEntry row = rows.get(i);
             AccountingEntry entry = new AccountingEntry();
             entry.setNumero(row.numero());
             entry.setMois(row.moisTexte());
@@ -181,13 +183,14 @@ public class ComptabilisationWorkflowService {
             entry.setCredit(row.credit());
             entry.setNdosjrn(context.journal());
             entry.setNcompte(row.ncompte());
+            entry.setAccountNumber(row.ncompte());
             entry.setSourceStatementId(contextStatementId);
             entry.setSourceTransactionId(row.sourceTransactionId());
             entry.setIsCounterpart(row.counterpart());
             entry.setBatchId(simulationId);
             entries.add(entry);
 
-            long numeroCptjournal = cptjournalBaseNumero + (row.numero() - 1L);
+            long numeroCptjournal = cptjournalBaseNumero + i;
             LocalDate dateOperation = row.dateOperation();
             cptjournalRows.add(new CptjournalJdbcRepository.CptjournalRow(
                     numeroCptjournal,

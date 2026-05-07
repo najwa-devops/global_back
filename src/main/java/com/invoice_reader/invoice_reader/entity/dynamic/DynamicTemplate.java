@@ -68,11 +68,13 @@ public class DynamicTemplate {
 
     // Template actif ou non
 
+    @Builder.Default
     @Column(nullable = false)
     private Boolean active = true;
 
     // Version du template (v1, v2, v3...)
 
+    @Builder.Default
     @Column(nullable = false)
     private Integer version = 1;
 
@@ -83,9 +85,11 @@ public class DynamicTemplate {
 
     // === MÉTRIQUES ===
 
+    @Builder.Default
     @Column(name = "usage_count")
     private Integer usageCount = 0;
 
+    @Builder.Default
     @Column(name = "success_count")
     private Integer successCount = 0;
 

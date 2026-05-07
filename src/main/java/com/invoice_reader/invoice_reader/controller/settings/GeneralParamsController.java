@@ -66,7 +66,7 @@ public class GeneralParamsController {
                     return created;
                 });
 
-        applyRequest(params, request);
+        applyRequest(params, request, sessionUser);
         DossierGeneralParams saved = generalParamsDao.save(params);
 
         return ResponseEntity.ok(Map.of(
@@ -75,7 +75,7 @@ public class GeneralParamsController {
         ));
     }
 
-    private void applyRequest(DossierGeneralParams target, UpsertDossierGeneralParamsRequest request) {
+    private void applyRequest(DossierGeneralParams target, UpsertDossierGeneralParamsRequest request, SessionUser sessionUser) {
         target.setCompanyName(trimOrNull(request.getCompanyName()));
         target.setAddress(trimOrNull(request.getAddress()));
         target.setLegalForm(trimOrNull(request.getLegalForm()));
@@ -95,6 +95,10 @@ public class GeneralParamsController {
         target.setIndividualPerson(Boolean.TRUE.equals(request.getIndividualPerson()));
         target.setHasFiscalRegularityCertificate(Boolean.TRUE.equals(request.getHasFiscalRegularityCertificate()));
         target.setAllowValidatedDocumentDeletion(Boolean.TRUE.equals(request.getAllowValidatedDocumentDeletion()));
+        // Only ADMIN can change the accounted-document-deletion flag
+        if (sessionUser != null && sessionUser.isAdmin()) {
+            target.setAllowAccountedDocumentDeletion(Boolean.TRUE.equals(request.getAllowAccountedDocumentDeletion()));
+        }
     }
 
     private String trimOrNull(String value) {
@@ -125,6 +129,7 @@ public class GeneralParamsController {
         response.put("individualPerson", params != null && Boolean.TRUE.equals(params.getIndividualPerson()));
         response.put("hasFiscalRegularityCertificate", params != null && Boolean.TRUE.equals(params.getHasFiscalRegularityCertificate()));
         response.put("allowValidatedDocumentDeletion", params != null && Boolean.TRUE.equals(params.getAllowValidatedDocumentDeletion()));
+        response.put("allowAccountedDocumentDeletion", params != null && Boolean.TRUE.equals(params.getAllowAccountedDocumentDeletion()));
         return response;
     }
 

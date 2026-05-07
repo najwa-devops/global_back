@@ -287,7 +287,8 @@ public class BankStatementController {
                 }
             }
 
-            if (sessionUser != null && sessionUser.isComptable() && !sessionUser.isAdmin()) {
+            // Admin et comptable ne voient que les relevés validés par le client
+            if (sessionUser != null && !sessionUser.isClient()) {
                 statements = statements.stream()
                         .filter(statement -> Boolean.TRUE.equals(statement.getClientValidated()))
                         .toList();
@@ -338,13 +339,22 @@ public class BankStatementController {
         if (sessionUser != null && sessionUser.isClient() && Boolean.TRUE.equals(statement.getClientValidated())) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "client_validated"));
         }
-        if (Boolean.TRUE.equals(statement.getClientValidated()) && !isValidatedDocumentDeletionAllowed(resolvedDossierId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "validated_document_deletion_disabled"));
-        }
-        if (!statement.isModifiable()) {
+        BankStatus stmtStatus = statement.getStatus();
+        // COMPTABILISE → ADMIN only + flag allowAccountedDocumentDeletion
+        if (stmtStatus == BankStatus.COMPTABILISE) {
+            if (sessionUser == null || !sessionUser.isAdmin()) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                        "error", "accounted_document_deletion_admin_only"));
+            }
+            if (!isAccountedDocumentDeletionAllowed(resolvedDossierId)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                        "error", "accounted_document_deletion_disabled"));
+            }
+        } else if (stmtStatus == BankStatus.VALIDATED
+                && !isValidatedDocumentDeletionAllowed(resolvedDossierId)) {
+            // VALIDATED (not comptabilisé) → flag allowValidatedDocumentDeletion
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
-                    "error", "Relevé comptabilisé/validé, suppression impossible",
-                    "status", statement.getStatus() != null ? statement.getStatus().name() : "UNKNOWN"));
+                    "error", "validated_document_deletion_disabled"));
         }
 
         processingService.deleteStatement(id);
@@ -668,9 +678,9 @@ public class BankStatementController {
         return repository.findById(id)
                 .map(statement -> {
                     boolean enabled = Boolean.TRUE.equals(request.getEnabled());
-                    if (!statement.isModifiable()) {
+                    if (statement.getStatus() == BankStatus.COMPTABILISE) {
                         return ResponseEntity.badRequest().body(Map.of(
-                                "error", "Relevé validé/comptabilisé, modification TTC impossible",
+                                "error", "Relevé comptabilisé, modification TTC impossible",
                                 "statement", toResponse(statement)));
                     }
                     statement.setApplyTtcRule(enabled);
@@ -711,9 +721,9 @@ public class BankStatementController {
         return repository.findById(id)
                 .map(statement -> {
                     boolean enabled = Boolean.TRUE.equals(request.getEnabled());
-                    if (!statement.isModifiable()) {
+                    if (statement.getStatus() == BankStatus.COMPTABILISE) {
                         return ResponseEntity.badRequest().body(Map.of(
-                                "error", "Relevé validé/comptabilisé, modification règle frais impossible",
+                                "error", "Relevé comptabilisé, modification règle frais impossible",
                                 "statement", toResponse(statement)));
                     }
                     statement.setApplyFraisRule(enabled);
@@ -754,9 +764,9 @@ public class BankStatementController {
         return repository.findById(id)
                 .map(statement -> {
                     boolean enabled = Boolean.TRUE.equals(request.getEnabled());
-                    if (!statement.isModifiable()) {
+                    if (statement.getStatus() == BankStatus.COMPTABILISE) {
                         return ResponseEntity.badRequest().body(Map.of(
-                                "error", "Relevé validé/comptabilisé, modification règle agios impossible",
+                                "error", "Relevé comptabilisé, modification règle agios impossible",
                                 "statement", toResponse(statement)));
                     }
                     statement.setApplyAgiosRule(enabled);
@@ -797,9 +807,9 @@ public class BankStatementController {
         return repository.findById(id)
                 .map(statement -> {
                     boolean enabled = Boolean.TRUE.equals(request.getEnabled());
-                    if (!statement.isModifiable()) {
+                    if (statement.getStatus() == BankStatus.COMPTABILISE) {
                         return ResponseEntity.badRequest().body(Map.of(
-                                "error", "Relevé validé/comptabilisé, modification règle package impossible",
+                                "error", "Relevé comptabilisé, modification règle package impossible",
                                 "statement", toResponse(statement)));
                     }
                     statement.setApplyPackageRule(enabled);
@@ -1263,6 +1273,12 @@ public class BankStatementController {
                 .orElse(false);
     }
 
+    private boolean isAccountedDocumentDeletionAllowed(Long dossierId) {
+        return dossierGeneralParamsDao.findByDossierId(dossierId)
+                .map(params -> Boolean.TRUE.equals(params.getAllowAccountedDocumentDeletion()))
+                .orElse(false);
+    }
+
     private boolean canAccessStatementInDossier(SessionUser sessionUser, BankStatement statement, Long dossierId) {
         if (sessionUser == null || statement == null || dossierId == null) {
             return false;
@@ -1567,19 +1583,19 @@ public class BankStatementController {
             return "A_VERIFIER";
         }
 
-        // Ne pas masquer les statuts techniques.
+        // Statuts techniques : afficher tels quels
         if (statement.getStatus() == BankStatus.ERROR
                 || statement.getStatus() == BankStatus.PROCESSING
                 || statement.getStatus() == BankStatus.PENDING
                 || statement.getStatus() == BankStatus.VALIDATED
-                || statement.getStatus() == BankStatus.COMPTABILISE
-                || statement.getStatus() == BankStatus.READY_TO_VALIDATE) {
+                || statement.getStatus() == BankStatus.COMPTABILISE) {
             return mapStatus(statement.getStatus());
         }
 
         if (Boolean.TRUE.equals(statement.getIsDuplicate())) {
             return "DUPLIQUE";
         }
+
         boolean isEmpty = (statement.getRib() == null || statement.getRib().isBlank())
                 && statement.getTransactionCount() == 0
                 && statement.getTotalDebitPdf() == null
@@ -1587,7 +1603,28 @@ public class BankStatementController {
         if (isEmpty) {
             return "VIDE";
         }
-        return mapStatus(statement.getStatus());
+
+        // "À vérifier" uniquement si les totaux calculés diffèrent des totaux OCR
+        if (hasTotalMismatch(statement)) {
+            return "A_VERIFIER";
+        }
+
+        return "PRET_A_VALIDER";
+    }
+
+    private boolean hasTotalMismatch(BankStatement statement) {
+        BigDecimal debitPdf = statement.getTotalDebitPdf();
+        BigDecimal creditPdf = statement.getTotalCreditPdf();
+        if (debitPdf == null && creditPdf == null) {
+            return false;
+        }
+        BigDecimal debitCalc = statement.getTotalDebit() != null ? statement.getTotalDebit() : BigDecimal.ZERO;
+        BigDecimal creditCalc = statement.getTotalCredit() != null ? statement.getTotalCredit() : BigDecimal.ZERO;
+        boolean debitOk = debitPdf == null
+                || debitPdf.subtract(debitCalc).abs().compareTo(new BigDecimal("0.01")) <= 0;
+        boolean creditOk = creditPdf == null
+                || creditPdf.subtract(creditCalc).abs().compareTo(new BigDecimal("0.01")) <= 0;
+        return !(debitOk && creditOk);
     }
 
     public static class UpdateBankStatementStatusRequest {

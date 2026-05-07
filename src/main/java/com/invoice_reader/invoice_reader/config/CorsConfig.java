@@ -2,22 +2,34 @@ package com.invoice_reader.invoice_reader.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
 import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Configuration
 public class CorsConfig {
+
+    @Value("${cors.allowed.origins:*}")
+    private String allowedOrigins;
 
     @Bean
     public CorsFilter corsFilter() {
         CorsConfiguration config = new CorsConfiguration();
 
-        // Autoriser toutes les origines (en dev)
-        config.setAllowedOrigins(Arrays.asList("http://localhost:3000", "http://localhost:3001",
-                "http://127.0.0.1:3000", "http://172.20.1.3", "http://172.20.1.3:3000"));
+        // En mode dev, "*" autorise toutes les origines de façon compatible avec les cookies de session.
+        if ("*".equals(allowedOrigins.trim())) {
+            config.setAllowedOriginPatterns(List.of("*"));
+        } else {
+            config.setAllowedOriginPatterns(Arrays.stream(allowedOrigins.split(","))
+                    .map(String::trim)
+                    .filter(origin -> !origin.isBlank())
+                    .collect(Collectors.toList()));
+        }
 
         // Autoriser toutes les methodes HTTP
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"));

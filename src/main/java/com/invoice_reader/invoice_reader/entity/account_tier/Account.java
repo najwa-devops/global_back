@@ -44,6 +44,7 @@ public class Account {
     @Column(name = "taux")
     private Double tvaRate;
 
+    @Builder.Default
     @Column(name = "liv", nullable = false)
     private Boolean active = true;
 

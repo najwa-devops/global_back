@@ -19,6 +19,8 @@ public interface CentreMonetiqueBatchRepository extends JpaRepository<CentreMone
 
     long countByDossierId(Long dossierId);
 
+    long countByDossierIdAndClientValidatedTrue(Long dossierId);
+
     List<CentreMonetiqueBatch> findTop200ByDossierIdOrDossierIdIsNullOrderByCreatedAtDesc(Long dossierId);
 
     List<CentreMonetiqueBatch> findByRibAndStatusOrderByCreatedAtDesc(String rib, String status);

@@ -7,7 +7,6 @@ import com.invoice_reader.invoice_reader.entity.auth.UserAccount;
 import com.invoice_reader.invoice_reader.entity.auth.UserRole;
 import com.invoice_reader.invoice_reader.banking_entity.BankStatement;
 import com.invoice_reader.invoice_reader.banking_entity.BankStatus;
-import com.invoice_reader.invoice_reader.banking_entity.JournalBatch;
 import com.invoice_reader.invoice_reader.banking_repository.BankStatementRepository;
 import com.invoice_reader.invoice_reader.banking_repository.BankTransactionRepository;
 import com.invoice_reader.invoice_reader.banking_repository.JournalBatchRepository;
@@ -134,15 +133,21 @@ public class DossierController {
                     List<Map<String, Object>> pendingBankStatements = loadPendingBankStatementItems(d.getId(), d.getName(), d.getClientId(), clientName);
                     List<Map<String, Object>> pendingCentreMonetique = loadPendingCentreMonetiqueItems(d.getId(), d.getName(), d.getClientId(), clientName);
 
-                    long pendingInvoicesCount = pendingInvoices.size();
-                    long pendingDocumentsCount = pendingInvoicesCount
+                    long pendingInvoicesOnlyCount = pendingInvoices.size();
+                    long pendingDocumentsCount = pendingInvoicesOnlyCount
                             + pendingBankStatements.size()
                             + pendingCentreMonetique.size();
 
-                    long totalInvoices = dynamicInvoiceDao.countByDossierId(d.getId())
-                            + salesInvoiceRepository.countByDossierId(d.getId());
-                    long totalStatements = bankStatementRepository.countByDossierId(d.getId());
-                    long totalCentreMonetique = cmBatchRepository.countByDossierId(d.getId());
+                    boolean filterValidated = !sessionUser.isClient();
+                    long totalInvoices = filterValidated
+                            ? dynamicInvoiceDao.countByDossierIdAndClientValidatedTrue(d.getId()) + salesInvoiceRepository.countByDossierIdAndClientValidatedTrue(d.getId())
+                            : dynamicInvoiceDao.countByDossierId(d.getId()) + salesInvoiceRepository.countByDossierId(d.getId());
+                    long totalStatements = filterValidated
+                            ? bankStatementRepository.countByDossierIdAndClientValidatedTrue(d.getId())
+                            : bankStatementRepository.countByDossierId(d.getId());
+                    long totalCentreMonetique = filterValidated
+                            ? cmBatchRepository.countByDossierIdAndClientValidatedTrue(d.getId())
+                            : cmBatchRepository.countByDossierId(d.getId());
 
                     DossierGeneralParams generalParams = dossierGeneralParamsDao.findByDossierId(d.getId()).orElse(null);
                     String fournisseurName = resolveFournisseurName(d, generalParams);
@@ -161,11 +166,19 @@ public class DossierController {
                     m.put("fournisseurEmail", fournisseurName);
                     m.put("ice", generalParams != null ? generalParams.getIce() : null);
                     m.put("invoicesCount", totalInvoices);
-                    m.put("pendingInvoicesCount", pendingInvoicesCount);
+                    // Keep the legacy field aligned with the badge shown in the dossiers page.
+                    m.put("pendingInvoicesCount", pendingDocumentsCount);
+                    m.put("pendingInvoicesOnlyCount", pendingInvoicesOnlyCount);
                     m.put("pendingDocumentsCount", pendingDocumentsCount);
-                    long validatedInvoicesCount = dynamicInvoiceDao.countByStatusAndDossierId(InvoiceStatus.VALIDATED, d.getId())
-                            + salesInvoiceRepository.countByStatusAndDossierId(InvoiceStatus.VALIDATED, d.getId());
+                    long validatedInvoicesCount = filterValidated
+                            ? dynamicInvoiceDao.countByStatusAndDossierIdAndClientValidatedTrue(InvoiceStatus.VALIDATED, d.getId()) + salesInvoiceRepository.countByStatusAndDossierIdAndClientValidatedTrue(InvoiceStatus.VALIDATED, d.getId())
+                            : dynamicInvoiceDao.countByStatusAndDossierId(InvoiceStatus.VALIDATED, d.getId()) + salesInvoiceRepository.countByStatusAndDossierId(InvoiceStatus.VALIDATED, d.getId());
+                    long validatedBankStatementsCount = bankStatementRepository.countByDossierIdAndStatus(d.getId(), BankStatus.VALIDATED)
+                            + bankStatementRepository.countByDossierIdAndStatus(d.getId(), BankStatus.COMPTABILISE);
+                    long validatedDocumentsCount = validatedInvoicesCount + validatedBankStatementsCount;
                     m.put("validatedInvoicesCount", validatedInvoicesCount);
+                    m.put("validatedBankStatementsCount", validatedBankStatementsCount);
+                    m.put("validatedDocumentsCount", validatedDocumentsCount);
                     m.put("bankStatementsCount", totalStatements);
                     m.put("pendingBankStatementsCount", pendingBankStatements.size());
                     m.put("centreMonetiqueCount", totalCentreMonetique);
@@ -549,39 +562,37 @@ public class DossierController {
     }
 
     private boolean isPendingInvoice(DynamicInvoice invoice) {
-        if (invoice == null || invoice.getStatus() == null) {
-            return false;
-        }
-        return switch (invoice.getStatus()) {
-            case VALIDATED, ACCOUNTED, ERROR, DUPLICATE, OUT_OF_PERIOD -> false;
-            default -> true;
-        };
+        if (invoice == null || invoice.getStatus() == null) return false;
+        if (!Boolean.TRUE.equals(invoice.getClientValidated())) return false;
+        return invoice.getStatus() != InvoiceStatus.VALIDATED
+                && invoice.getStatus() != InvoiceStatus.ACCOUNTED
+                && invoice.getStatus() != InvoiceStatus.ERROR
+                && invoice.getStatus() != InvoiceStatus.DUPLICATE;
     }
 
     private boolean isPendingInvoice(com.invoice_reader.invoice_reader.sales.entity.SalesInvoice invoice) {
-        if (invoice == null || invoice.getStatus() == null) {
-            return false;
-        }
-        return switch (invoice.getStatus()) {
-            case VALIDATED, ACCOUNTED, ERROR, DUPLICATE, OUT_OF_PERIOD -> false;
-            default -> true;
-        };
+        if (invoice == null || invoice.getStatus() == null) return false;
+        if (!Boolean.TRUE.equals(invoice.getClientValidated())) return false;
+        return invoice.getStatus() != InvoiceStatus.VALIDATED
+                && invoice.getStatus() != InvoiceStatus.ACCOUNTED
+                && invoice.getStatus() != InvoiceStatus.ERROR
+                && invoice.getStatus() != InvoiceStatus.DUPLICATE;
     }
 
     private boolean isPendingBankStatement(BankStatement statement) {
-        if (statement == null || statement.getStatus() == null) {
-            return false;
-        }
-        return statement.getStatus() != BankStatus.COMPTABILISE
+        if (statement == null || statement.getStatus() == null) return false;
+        if (!statement.isClientValidated()) return false;
+        return statement.getStatus() != BankStatus.VALIDATED
+                && statement.getStatus() != BankStatus.COMPTABILISE
                 && statement.getStatus() != BankStatus.ERROR
                 && statement.getStatus() != BankStatus.DUPLIQUE;
     }
 
     private boolean isPendingCentreMonetique(CentreMonetiqueBatch batch) {
-        if (batch == null || batch.getStatus() == null) {
+        if (batch == null) {
             return false;
         }
-        return !"PROCESSED".equalsIgnoreCase(batch.getStatus());
+        return batch.isClientValidated();
     }
 
     private List<Map<String, Object>> sortByCreatedAtDesc(List<Map<String, Object>> items) {

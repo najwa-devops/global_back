@@ -128,6 +128,7 @@ public class FieldLearningData {
      * REJECTED: Rejeté (pattern incorrect)
      * AUTO_APPROVED: Auto-approuvé (haute confiance)
      */
+    @Builder.Default
     @Column(name = "status", nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
     private LearningStatus status = LearningStatus.PENDING;
@@ -142,6 +143,7 @@ public class FieldLearningData {
      * Nombre de fois où ce pattern a été détecté
      * (pour détecter les patterns récurrents)
      */
+    @Builder.Default
     @Column(name = "occurrence_count")
     private Integer occurrenceCount = 1;
 
@@ -167,6 +169,7 @@ public class FieldLearningData {
      * AUTO_CORRECTION: Correction automatique
      * ML_SUGGESTION: Suggestion par ML
      */
+    @Builder.Default
     @Column(name = "detection_method", length = 30)
     private String detectionMethod = "USER_SELECTION";
 

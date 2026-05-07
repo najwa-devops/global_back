@@ -1152,6 +1152,7 @@ public class AdvancedOcrService {
      * Enrichit le texte natif d'un PDF avec OCR sur premiÃ¨re/derniÃ¨re page.
      * Cela rÃ©cupÃ¨re les footers souvent absents du layer texte.
      */
+    @Deprecated
     private boolean shouldEnrichPdfFooter(String nativeText) {
         if (nativeText == null || nativeText.isBlank()) {
             return false;

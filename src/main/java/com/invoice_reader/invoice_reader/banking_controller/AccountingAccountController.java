@@ -20,7 +20,7 @@ import java.util.Map;
 @RequestMapping("/api/v2/accounting/accounts")
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*")
-@RequireRole({UserRole.ADMIN, UserRole.COMPTABLE})
+@RequireRole({UserRole.ADMIN, UserRole.COMPTABLE, UserRole.CLIENT})
 public class AccountingAccountController {
 
     private final AccountDao accountDao;
@@ -44,6 +44,51 @@ public class AccountingAccountController {
         //         ? accountDao.findByActiveTrueOrderByCodeAsc()
         //         : accountDao.findAllByOrderByCodeAsc();
         return ResponseEntity.ok(Map.of("count", accounts.size(), "accounts", accounts));
+    }
+
+    @GetMapping("/charges")
+    public ResponseEntity<?> chargeAccounts() {
+        List<Account> all;
+        try {
+            all = externalComptesCatalogService.loadAccounts();
+        } catch (Exception e) {
+            all = accountDao.findByActiveTrueOrderByCodeAsc();
+        }
+        List<AccountOption> options = all.stream()
+                .filter(a -> a.getCode() != null && a.getCode().startsWith("6"))
+                .map(a -> new AccountOption(a.getCode(), a.getLibelle()))
+                .toList();
+        return ResponseEntity.ok(Map.of("count", options.size(), "accounts", options));
+    }
+
+    @GetMapping("/tva")
+    public ResponseEntity<?> tvaAccounts() {
+        List<Account> all;
+        try {
+            all = externalComptesCatalogService.loadAccounts();
+        } catch (Exception e) {
+            all = accountDao.findByActiveTrueOrderByCodeAsc();
+        }
+        List<AccountOption> options = all.stream()
+                .filter(a -> a.getCode() != null && (a.getCode().startsWith("3455") || a.getCode().startsWith("4455")))
+                .map(a -> new AccountOption(a.getCode(), a.getLibelle()))
+                .toList();
+        return ResponseEntity.ok(Map.of("count", options.size(), "accounts", options));
+    }
+
+    @GetMapping("/fournisseurs")
+    public ResponseEntity<?> fournisseurAccounts() {
+        List<Account> all;
+        try {
+            all = externalComptesCatalogService.loadAccounts();
+        } catch (Exception e) {
+            all = accountDao.findByActiveTrueOrderByCodeAsc();
+        }
+        List<AccountOption> options = all.stream()
+                .filter(a -> a.getCode() != null && a.getCode().startsWith("441"))
+                .map(a -> new AccountOption(a.getCode(), a.getLibelle()))
+                .toList();
+        return ResponseEntity.ok(Map.of("count", options.size(), "accounts", options));
     }
 
     @GetMapping("/options")

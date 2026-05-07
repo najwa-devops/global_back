@@ -237,8 +237,10 @@ public class FieldLearningController {
     public ResponseEntity<?> bulkApprovePatterns(
             @RequestBody Map<String, Object> request
     ) {
-        @SuppressWarnings("unchecked")
-        List<Long> ids = (List<Long>) request.get("ids");
+        List<Long> ids = extractIds(request.get("ids"));
+        if (ids == null || ids.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "ids requis"));
+        }
         String approvedBy = (String) request.getOrDefault("approvedBy", "admin");
 
         log.info("POST /api/v2/learning/bulk-approve - {} patterns", ids.size());
@@ -392,6 +394,24 @@ public class FieldLearningController {
         response.put("message", "Endpoint fonctionnel");
         response.put("invoiceId", invoiceId);
         return ResponseEntity.ok(response);
+    }
+
+    private List<Long> extractIds(Object rawIds) {
+        if (!(rawIds instanceof List<?> list)) {
+            return null;
+        }
+        List<Long> ids = new java.util.ArrayList<>(list.size());
+        for (Object item : list) {
+            if (item == null) {
+                continue;
+            }
+            try {
+                ids.add(Long.valueOf(item.toString()));
+            } catch (NumberFormatException e) {
+                log.warn("ID invalide ignore: {}", item);
+            }
+        }
+        return ids;
     }
 
 

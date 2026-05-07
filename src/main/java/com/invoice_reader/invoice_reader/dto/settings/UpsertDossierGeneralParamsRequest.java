@@ -25,5 +25,6 @@ public class UpsertDossierGeneralParamsRequest {
     private Boolean individualPerson;
     private Boolean hasFiscalRegularityCertificate;
     private Boolean allowValidatedDocumentDeletion;
+    private Boolean allowAccountedDocumentDeletion;
 }
 

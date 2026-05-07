@@ -137,4 +137,18 @@ public final class BankAliasResolver {
                 || "DETECTION AUTOMATIC".equals(normalizedToken)
                 || (normalizedToken.contains("DETECTION") && normalizedToken.contains("AUTO"));
     }
+
+    public static String normalizePolicyBankCode(String token) {
+        return normalizeAllowedBankCode(token);
+    }
+
+    public static List<String> prioritizeAutoFirst(List<String> codes) {
+        if (codes == null || !codes.contains("AUTO")) {
+            return codes;
+        }
+        List<String> result = new java.util.ArrayList<>(codes);
+        result.remove("AUTO");
+        result.add(0, "AUTO");
+        return result;
+    }
 }

@@ -26,6 +26,8 @@ public interface BankStatementRepository extends JpaRepository<BankStatement, Lo
 
     long countByDossierId(Long dossierId);
 
+    long countByDossierIdAndClientValidatedTrue(Long dossierId);
+
     long countByDossierIdAndRib(Long dossierId, String rib);
 
     @Query("SELECT COUNT(s) FROM BankStatement s WHERE s.rib = :rib AND (s.dossierId = :dossierId OR s.dossierId IS NULL)")
@@ -89,6 +91,8 @@ public interface BankStatementRepository extends JpaRepository<BankStatement, Lo
                 ORDER BY s.createdAt DESC
             """)
     List<BankStatement> findByYearAndMonthOrderByCreatedAtDesc(@Param("year") Integer year, @Param("month") Integer month);
+
+    List<BankStatement> findByDossierIdAndYearAndMonthOrderByCreatedAtDesc(Long dossierId, Integer year, Integer month);
 
     @Query("""
                 SELECT DISTINCT s.year, s.month

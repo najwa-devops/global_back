@@ -421,7 +421,7 @@ public class DynamicInvoiceController {
                 resolvedDossierId,
                 supplier,
                 searchValue
-        );
+        ) > 0;
         return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", Map.of(
@@ -462,7 +462,7 @@ public class DynamicInvoiceController {
             invoices = dynamicInvoiceDao.findByDossierIdOrderByCreatedAtDesc(dossierId);
         }
 
-        if (sessionUser.isComptable() && !sessionUser.isAdmin()) {
+        if (!sessionUser.isClient()) {
             invoices = invoices.stream()
                     .filter(invoice -> Boolean.TRUE.equals(invoice.getClientValidated()))
                     .toList();
@@ -510,8 +510,19 @@ public class DynamicInvoiceController {
                         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                                 .body(Map.of("error", "client_not_visible"));
                     }
-                    if (Boolean.TRUE.equals(invoice.getClientValidated())
+                    // Accounted (comptabilisé): ADMIN only + flag allowAccountedDocumentDeletion
+                    if (Boolean.TRUE.equals(invoice.getAccounted()) || invoice.getAccountedAt() != null) {
+                        if (sessionUser == null || !sessionUser.isAdmin()) {
+                            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                    .body(Map.of("error", "accounted_document_deletion_admin_only"));
+                        }
+                        if (!isAccountedDocumentDeletionAllowed(resolvedDossierId)) {
+                            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                    .body(Map.of("error", "accounted_document_deletion_disabled"));
+                        }
+                    } else if (Boolean.TRUE.equals(invoice.getClientValidated())
                             && !isValidatedDocumentDeletionAllowed(resolvedDossierId)) {
+                        // Client-validated but NOT accounted: flag allowValidatedDocumentDeletion
                         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                                 .body(Map.of("error", "validated_document_deletion_disabled"));
                     }
@@ -1101,9 +1112,9 @@ public class DynamicInvoiceController {
                     .body(Map.of("error", "dossier_forbidden"));
         }
 
-        boolean comptableRestricted = sessionUser.isComptable() && !sessionUser.isAdmin();
+        boolean filterByClientValidated = !sessionUser.isClient();
 
-        if (comptableRestricted) {
+        if (filterByClientValidated) {
             stats.put("total", dynamicInvoiceDao.countByDossierIdAndClientValidatedTrue(dossierId));
             stats.put("pending",
                     dynamicInvoiceDao.countByStatusAndDossierIdAndClientValidatedTrue(InvoiceStatus.PENDING, dossierId));
@@ -1128,7 +1139,7 @@ public class DynamicInvoiceController {
             stats.put("error", dynamicInvoiceDao.countByStatusAndDossierId(InvoiceStatus.ERROR, dossierId));
         }
 
-        List<DynamicInvoice> lowConfidence = comptableRestricted
+        List<DynamicInvoice> lowConfidence = filterByClientValidated
                 ? dynamicInvoiceDao.findLowConfidenceByDossierIdClientValidated(0.7, dossierId)
                 : dynamicInvoiceDao.findLowConfidenceByDossierId(0.7, dossierId);
         stats.put("lowConfidenceCount", lowConfidence.size());
@@ -1476,6 +1487,12 @@ public class DynamicInvoiceController {
                 .orElse(false);
     }
 
+    private boolean isAccountedDocumentDeletionAllowed(Long dossierId) {
+        return dossierGeneralParamsDao.findByDossierId(dossierId)
+                .map(params -> Boolean.TRUE.equals(params.getAllowAccountedDocumentDeletion()))
+                .orElse(false);
+    }
+
     private boolean canAccessInvoiceInDossier(SessionUser sessionUser, DynamicInvoice invoice, Long dossierId) {
         if (sessionUser == null || invoice == null || dossierId == null) {
             return false;
@@ -1702,6 +1719,9 @@ public class DynamicInvoiceController {
             Optional<TierDto> tierDtoOpt = tierService.getTierById(tierId, invoice.getDossierId());
             if (tierDtoOpt.isPresent()) {
                 TierDto tier = tierDtoOpt.get();
+                Map<String, Object> fieldsData = invoice.getFieldsData() != null
+                        ? invoice.getFieldsData()
+                        : new LinkedHashMap<>();
 
                 Map<String, Object> tierData = new LinkedHashMap<>();
                 tierData.put("id", tier.getId());
@@ -1726,20 +1746,16 @@ public class DynamicInvoiceController {
                 tierData.put("hasAccountingConfig", hasAccountingConfig);
 
                 response.put("tier", tierData);
-
                 if (hasAccountingConfig) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> fieldsData = (Map<String, Object>) response.get("fieldsData");
-                    if (fieldsData != null) {
-                        fieldsData.put("tierNumber", tier.getTierNumber());
-                        if (tier.getAuxiliaireMode() != null && tier.getAuxiliaireMode()) {
-                            fieldsData.put("collectifAccount", tier.getCollectifAccount());
-                        }
-                        fieldsData.put("chargeAccount", tier.getDefaultChargeAccount());
-                        fieldsData.put("tvaAccount", tier.getTvaAccount());
-                        fieldsData.put("tvaRate", tier.getDefaultTvaRate());
+                    fieldsData.put("tierNumber", tier.getTierNumber());
+                    if (tier.getAuxiliaireMode() != null && tier.getAuxiliaireMode()) {
+                        fieldsData.put("collectifAccount", tier.getCollectifAccount());
                     }
+                    fieldsData.put("chargeAccount", tier.getDefaultChargeAccount());
+                    fieldsData.put("tvaAccount", tier.getTvaAccount());
+                    fieldsData.put("tvaRate", tier.getDefaultTvaRate());
                 }
+                response.put("fieldsData", fieldsData);
             } else {
                 response.put("tier", Map.of(
                         "id", tierId,

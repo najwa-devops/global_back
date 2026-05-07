@@ -388,7 +388,7 @@ public class DynamicTemplateController {
                 template = dynamicTemplateService.findById(templateId)
                         .orElseThrow(() -> new IllegalArgumentException("Template non trouvé: " + templateId));
             } else {
-                template = dynamicTemplateService.detectTemplate(ocrText).orElse(null);
+                template = dynamicTemplateService.detectTemplateBySignature(ocrText).orElse(null);
             }
 
             // Extraction
@@ -465,7 +465,7 @@ public class DynamicTemplateController {
             return ResponseEntity.badRequest().body(Map.of("error", "ocrText requis"));
         }
 
-        Optional<DynamicTemplate> template = dynamicTemplateService.detectTemplate(ocrText);
+        Optional<DynamicTemplate> template = dynamicTemplateService.detectTemplateBySignature(ocrText);
         if (template.isPresent()) {
             return ResponseEntity.ok(Map.of(
                     "detected", true,

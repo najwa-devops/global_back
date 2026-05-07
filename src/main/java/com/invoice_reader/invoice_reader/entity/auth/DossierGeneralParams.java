@@ -86,6 +86,9 @@ public class DossierGeneralParams {
     @Column(name = "allow_validated_document_deletion")
     private Boolean allowValidatedDocumentDeletion = false;
 
+    @Column(name = "allow_accounted_document_deletion")
+    private Boolean allowAccountedDocumentDeletion = false;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 
@@ -99,6 +102,7 @@ public class DossierGeneralParams {
         if (individualPerson == null) individualPerson = false;
         if (hasFiscalRegularityCertificate == null) hasFiscalRegularityCertificate = false;
         if (allowValidatedDocumentDeletion == null) allowValidatedDocumentDeletion = false;
+        if (allowAccountedDocumentDeletion == null) allowAccountedDocumentDeletion = false;
     }
 
     @PreUpdate

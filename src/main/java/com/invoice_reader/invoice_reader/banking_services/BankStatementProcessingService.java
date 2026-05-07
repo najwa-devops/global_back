@@ -1386,10 +1386,6 @@ public class BankStatementProcessingService {
         BankStatement statement = statementRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Relevé non trouvé: " + id));
 
-        if (!statement.isModifiable()) {
-            throw new IllegalStateException("Relevé comptabilisé/validé, suppression impossible");
-        }
-
         // Supprimer les transactions
         transactionRepository.deleteByStatementId(id);
 

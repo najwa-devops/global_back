@@ -64,6 +64,7 @@ public class SaveFieldsWithPatternsRequest {
     /**
      * Méthode de détection: USER_SELECTION, AUTO_CORRECTION, ML_SUGGESTION
      */
+    @Builder.Default
     private String detectionMethod = "USER_SELECTION";
 
     private Map<String, String> newPatterns;

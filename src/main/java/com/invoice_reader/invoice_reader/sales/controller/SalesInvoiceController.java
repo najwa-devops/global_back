@@ -350,7 +350,7 @@ public class SalesInvoiceController {
             invoices = salesInvoiceRepository.findByDossierIdOrderByCreatedAtDesc(dossierId);
         }
 
-        if (sessionUser.isComptable() && !sessionUser.isAdmin()) {
+        if (!sessionUser.isClient()) {
             invoices = invoices.stream()
                     .filter(invoice -> Boolean.TRUE.equals(invoice.getClientValidated()))
                     .toList();
@@ -387,6 +387,7 @@ public class SalesInvoiceController {
 
         List<Map<String, Object>> response = salesInvoiceRepository.findByDossierIdOrderByCreatedAtDesc(dossierId).stream()
                 .filter(this::isPendingWorkflowInvoice)
+                .filter(invoice -> sessionUser.isClient() || Boolean.TRUE.equals(invoice.getClientValidated()))
                 .limit(limit)
                 .map(this::toResponse)
                 .toList();
@@ -416,6 +417,7 @@ public class SalesInvoiceController {
         }
 
         List<Map<String, Object>> response = salesInvoiceRepository.findByDossierIdOrderByCreatedAtDesc(dossierId).stream()
+                .filter(invoice -> sessionUser.isClient() || Boolean.TRUE.equals(invoice.getClientValidated()))
                 .limit(limit)
                 .map(this::toResponse)
                 .toList();
@@ -1078,9 +1080,9 @@ public class SalesInvoiceController {
                     .body(Map.of("error", "dossier_forbidden"));
         }
 
-        boolean comptableRestricted = sessionUser.isComptable() && !sessionUser.isAdmin();
+        boolean filterByClientValidated = !sessionUser.isClient();
 
-        if (comptableRestricted) {
+        if (filterByClientValidated) {
             stats.put("total", salesInvoiceRepository.countByDossierIdAndClientValidatedTrue(dossierId));
             stats.put("pending", salesInvoiceRepository.countByStatusAndDossierIdAndClientValidatedTrue(InvoiceStatus.PENDING, dossierId));
             stats.put("processing", salesInvoiceRepository.countByStatusAndDossierIdAndClientValidatedTrue(InvoiceStatus.PROCESSING, dossierId));
@@ -1098,7 +1100,7 @@ public class SalesInvoiceController {
             stats.put("error", salesInvoiceRepository.countByStatusAndDossierId(InvoiceStatus.ERROR, dossierId));
         }
 
-        List<SalesInvoice> lowConfidence = comptableRestricted
+        List<SalesInvoice> lowConfidence = filterByClientValidated
                 ? salesInvoiceRepository.findLowConfidenceByDossierIdClientValidated(0.7, dossierId)
                 : salesInvoiceRepository.findLowConfidenceByDossierId(0.7, dossierId);
         stats.put("lowConfidenceCount", lowConfidence.size());
@@ -1731,6 +1733,9 @@ public class SalesInvoiceController {
             Optional<TierDto> tierDtoOpt = tierService.getTierById(tierId, invoice.getDossierId());
             if (tierDtoOpt.isPresent()) {
                 TierDto tier = tierDtoOpt.get();
+                Map<String, Object> fieldsData = invoice.getFieldsData() != null
+                        ? invoice.getFieldsData()
+                        : new LinkedHashMap<>();
 
                 Map<String, Object> tierData = new LinkedHashMap<>();
                 tierData.put("id", tier.getId());
@@ -1754,20 +1759,16 @@ public class SalesInvoiceController {
                 tierData.put("hasAccountingConfig", hasAccountingConfig);
 
                 response.put("tier", tierData);
-
                 if (hasAccountingConfig) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> fd = (Map<String, Object>) response.get("fieldsData");
-                    if (fd != null) {
-                        fd.put("tierNumber", tier.getTierNumber());
-                        if (tier.getAuxiliaireMode() != null && tier.getAuxiliaireMode()) {
-                            fd.put("collectifAccount", tier.getCollectifAccount());
-                        }
-                        fd.put("chargeAccount", tier.getDefaultChargeAccount());
-                        fd.put("tvaAccount", tier.getTvaAccount());
-                        fd.put("tvaRate", tier.getDefaultTvaRate());
+                    fieldsData.put("tierNumber", tier.getTierNumber());
+                    if (tier.getAuxiliaireMode() != null && tier.getAuxiliaireMode()) {
+                        fieldsData.put("collectifAccount", tier.getCollectifAccount());
                     }
+                    fieldsData.put("chargeAccount", tier.getDefaultChargeAccount());
+                    fieldsData.put("tvaAccount", tier.getTvaAccount());
+                    fieldsData.put("tvaRate", tier.getDefaultTvaRate());
                 }
+                response.put("fieldsData", fieldsData);
             } else {
                 response.put("tier", Map.of(
                         "id", tierId,

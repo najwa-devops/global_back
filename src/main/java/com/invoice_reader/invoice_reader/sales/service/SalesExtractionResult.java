@@ -19,8 +19,11 @@ public class SalesExtractionResult {
     private Long templateId;
     private String templateName;
 
+    @Builder.Default
     private Map<String, ExtractedField> extractedFields = new LinkedHashMap<>();
+    @Builder.Default
     private List<String> missingFields = new ArrayList<>();
+    @Builder.Default
     private List<String> lowConfidenceFields = new ArrayList<>();
 
     private Double overallConfidence;

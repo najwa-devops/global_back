@@ -40,6 +40,7 @@ public class BankTransactionAccountRule {
     @Column(name = "account_code", nullable = false, length = 20)
     private String accountCode;
 
+    @Builder.Default
     @Column(name = "usage_count", nullable = false)
     private Integer usageCount = 1;
 

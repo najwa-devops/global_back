@@ -9,6 +9,8 @@ import com.invoice_reader.invoice_reader.banking_repository.JournalEntryReposito
 import com.invoice_reader.invoice_reader.banking_services.ComptabilisationWorkflowService;
 import com.invoice_reader.invoice_reader.banking_entity.BankStatement;
 import com.invoice_reader.invoice_reader.banking_repository.BankStatementRepository;
+import com.invoice_reader.invoice_reader.servises.auth.SessionKeys;
+import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -29,10 +31,13 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 @RestController
 @RequestMapping({"/api/journals", "/api/v2/journals"})
@@ -51,23 +56,31 @@ public class JournalController {
     private final JournalEntryRepository journalEntryRepository;
 
     @GetMapping("/periods")
-    public ResponseEntity<?> listPeriods() {
-        seedJournalBatches(bankStatementRepository.findAllWithPeriodOrderByYearMonthDesc());
-        List<Object[]> raw = journalBatchRepository.findDistinctPeriods();
-        List<JournalPeriod> periods = new ArrayList<>(raw.size());
-        for (Object[] row : raw) {
-            Integer year = row[0] != null ? ((Number) row[0]).intValue() : null;
-            Integer month = row[1] != null ? ((Number) row[1]).intValue() : null;
-            if (year == null || month == null) {
-                continue;
-            }
-            periods.add(new JournalPeriod(year, month, formatPeriodKey(year, month)));
+    public ResponseEntity<?> listPeriods(
+            @RequestParam(name = "dossierId", required = false) Long dossierId,
+            HttpSession session) {
+        Long effectiveDossierId = resolveEffectiveDossierId(dossierId, session);
+        List<BankStatement> statements = effectiveDossierId != null
+                ? bankStatementRepository.findByDossierIdOrderByCreatedAtDesc(effectiveDossierId)
+                        .stream().filter(s -> s.getYear() != null && s.getMonth() != null).toList()
+                : bankStatementRepository.findAllWithPeriodOrderByYearMonthDesc();
+        seedJournalBatches(statements);
+        // Compute distinct periods from filtered statements (preserves dossier scope)
+        Map<String, JournalPeriod> seen = new LinkedHashMap<>();
+        for (BankStatement s : statements) {
+            if (s.getYear() == null || s.getMonth() == null) continue;
+            String key = formatPeriodKey(s.getYear(), s.getMonth());
+            seen.putIfAbsent(key, new JournalPeriod(s.getYear(), s.getMonth(), key));
         }
-        return ResponseEntity.ok(Map.of("periods", periods));
+        return ResponseEntity.ok(Map.of("periods", new ArrayList<>(seen.values())));
     }
 
     @GetMapping
-    public ResponseEntity<?> listJournals(@RequestParam(name = "period", required = false) String period) {
+    public ResponseEntity<?> listJournals(
+            @RequestParam(name = "period", required = false) String period,
+            @RequestParam(name = "dossierId", required = false) Long dossierId,
+            HttpSession session) {
+        Long effectiveDossierId = resolveEffectiveDossierId(dossierId, session);
         Integer year = null;
         Integer month = null;
         if (period != null && !period.isBlank()) {
@@ -84,9 +97,17 @@ public class JournalController {
             }
         }
 
-        List<BankStatement> statements = (year != null && month != null)
-                ? bankStatementRepository.findByYearAndMonthOrderByCreatedAtDesc(year, month)
-                : bankStatementRepository.findAllWithPeriodOrderByYearMonthDesc();
+        List<BankStatement> statements;
+        if (year != null && month != null) {
+            statements = effectiveDossierId != null
+                    ? bankStatementRepository.findByDossierIdAndYearAndMonthOrderByCreatedAtDesc(effectiveDossierId, year, month)
+                    : bankStatementRepository.findByYearAndMonthOrderByCreatedAtDesc(year, month);
+        } else {
+            statements = effectiveDossierId != null
+                    ? bankStatementRepository.findByDossierIdOrderByCreatedAtDesc(effectiveDossierId)
+                            .stream().filter(s -> s.getYear() != null && s.getMonth() != null).toList()
+                    : bankStatementRepository.findAllWithPeriodOrderByYearMonthDesc();
+        }
 
         seedJournalBatches(statements);
         List<JournalItem> items = new ArrayList<>(statements.size());
@@ -105,6 +126,186 @@ public class JournalController {
             ));
         }
         return ResponseEntity.ok(Map.of("journals", items));
+    }
+
+    @GetMapping("/all-entries")
+    public ResponseEntity<?> getAllJournalEntries(
+            @RequestParam(name = "dossierId", required = false) Long dossierId,
+            @RequestParam(name = "year", required = false) Integer year,
+            HttpSession session) {
+        Long effectiveDossierId = resolveEffectiveDossierId(dossierId, session);
+        AllEntriesPayload payload = collectAllEntries(effectiveDossierId, year);
+        return ResponseEntity.ok(Map.of(
+                "entries", payload.entries(),
+                "totalDebit", payload.totalDebit(),
+                "totalCredit", payload.totalCredit(),
+                "solde", payload.solde(),
+                "balanced", payload.balanced(),
+                "count", payload.entries().size(),
+                "availableYears", payload.availableYears(),
+                "availableJournals", payload.availableJournals()
+        ));
+    }
+
+    @PostMapping("/export-all")
+    public ResponseEntity<?> exportAllJournal(
+            @RequestParam(name = "dossierId", required = false) Long dossierId,
+            @RequestParam(name = "year", required = false) Integer year,
+            @RequestHeader(name = "X-User-Id", required = false) String userId,
+            HttpSession session) {
+        Long effectiveDossierId = resolveEffectiveDossierId(dossierId, session);
+        AllEntriesPayload payload = collectAllEntries(effectiveDossierId, year);
+        List<JournalRow> rows = new ArrayList<>(payload.entries().size());
+        for (JournalEntryRow r : payload.entries()) {
+            rows.add(new JournalRow(r.numero(), r.mois(), r.nmois(), r.date(), r.journal(), r.compte(), r.libelle(), r.debit(), r.credit(), r.sourceTransactionId(), r.counterpart()));
+        }
+        String csv = buildCsv(rows);
+        String period = year != null ? String.valueOf(year) : "all";
+        String filename = "journal_comptable_banque_" + period + ".csv";
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/csv; charset=utf-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .body(csv.getBytes(StandardCharsets.UTF_8));
+    }
+
+    @PostMapping("/print-all")
+    public ResponseEntity<?> printAllJournal(
+            @RequestParam(name = "dossierId", required = false) Long dossierId,
+            @RequestParam(name = "year", required = false) Integer year,
+            @RequestHeader(name = "X-User-Id", required = false) String userId,
+            HttpSession session) {
+        Long effectiveDossierId = resolveEffectiveDossierId(dossierId, session);
+        AllEntriesPayload payload = collectAllEntries(effectiveDossierId, year);
+        String html = buildPrintHtmlAll(payload, year);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/html; charset=utf-8"))
+                .body(html);
+    }
+
+    private AllEntriesPayload collectAllEntries(Long effectiveDossierId, Integer year) {
+        List<BankStatement> statements = effectiveDossierId != null
+                ? bankStatementRepository.findByDossierIdOrderByCreatedAtDesc(effectiveDossierId)
+                        .stream().filter(s -> s.getYear() != null && s.getMonth() != null
+                                && (year == null || year.equals(s.getYear()))).toList()
+                : bankStatementRepository.findAllWithPeriodOrderByYearMonthDesc()
+                        .stream().filter(s -> year == null || year.equals(s.getYear())).toList();
+
+        List<JournalEntryRow> allRows = new ArrayList<>();
+        for (BankStatement statement : statements) {
+            // First: try journal_entry table (already-built cache)
+            JournalBatch batch = journalBatchRepository.findByStatementId(statement.getId()).orElse(null);
+            if (batch != null) {
+                List<JournalEntry> entries = journalEntryRepository.findByBatchIdOrderByNumeroAscIdAsc(batch.getId());
+                if (!entries.isEmpty()) {
+                    for (JournalEntry e : entries) {
+                        allRows.add(JournalEntryRow.fromJournalEntry(e));
+                    }
+                    continue;
+                }
+            }
+            // Fallback: read directly from accounting_entries (no side effects, no lazy-load risk)
+            List<AccountingEntry> accountingEntries =
+                    accountingEntryRepository.findBySourceStatementIdOrderByNumeroAscIdAsc(statement.getId());
+            for (AccountingEntry e : accountingEntries) {
+                String date = e.getDateComplete() != null ? e.getDateComplete().format(DATE_FORMAT) : "";
+                allRows.add(new JournalEntryRow(
+                        e.getNumero() != null ? e.getNumero() : 0L,
+                        e.getMois(),
+                        e.getNmois() != null ? e.getNmois() : 0,
+                        date,
+                        e.getNdosjrn(),
+                        e.getNcompte(),
+                        e.getEcriture(),
+                        e.getDebit(),
+                        e.getCredit(),
+                        e.getSourceTransactionId(),
+                        Boolean.TRUE.equals(e.getIsCounterpart())
+                ));
+            }
+        }
+
+        BigDecimal totalDebit = allRows.stream()
+                .map(r -> r.debit() != null ? r.debit() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = allRows.stream()
+                .map(r -> r.credit() != null ? r.credit() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal solde = totalDebit.subtract(totalCredit);
+        List<Integer> availableYears = statements.stream()
+                .map(BankStatement::getYear).filter(y -> y != null)
+                .distinct().sorted(Comparator.reverseOrder()).toList();
+        List<String> availableJournals = allRows.stream()
+                .map(JournalEntryRow::journal).filter(j -> j != null && !j.isBlank())
+                .distinct().sorted().toList();
+        return new AllEntriesPayload(allRows, formatAmount(totalDebit), formatAmount(totalCredit),
+                formatAmount(solde), solde.compareTo(BigDecimal.ZERO) == 0, availableYears, availableJournals);
+    }
+
+    private String buildPrintHtmlAll(AllEntriesPayload payload, Integer year) {
+        String periodLabel = year != null ? "Exercice " + year : "Toutes les périodes";
+        String printDate = LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"));
+        StringBuilder html = new StringBuilder();
+        html.append("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"UTF-8\"/>")
+                .append("<title>Journal Comptable Banque</title>")
+                .append("<style>")
+                .append("body{font-family:Arial,sans-serif;margin:24px;color:#111}")
+                .append("h1{font-size:20px;margin:0 0 4px}")
+                .append(".meta{margin-bottom:8px;font-size:12px;color:#444}")
+                .append(".stats{margin-bottom:16px;font-size:13px;font-weight:bold}")
+                .append(".debit-val{color:#dc2626}.credit-val{color:#166534}")
+                .append("table{width:100%;border-collapse:collapse;font-size:11px}")
+                .append("th{background:#f2f2f2;border:1px solid #ddd;padding:5px 6px;text-align:left;font-weight:600;text-transform:uppercase}")
+                .append("td{border:1px solid #ddd;padding:4px 6px}")
+                .append(".num{text-align:right}.debit{text-align:right;color:#dc2626;font-weight:600}")
+                .append(".credit{text-align:right;font-weight:600}.dash{text-align:right;color:#aaa}")
+                .append("</style></head><body>")
+                .append("<h1>Journal Comptable Banque</h1>")
+                .append("<div class=\"meta\">").append(escapeHtml(periodLabel))
+                .append(" | Imprimé le ").append(escapeHtml(printDate))
+                .append(" | ").append(payload.entries().size()).append(" écritures</div>")
+                .append("<div class=\"stats\">")
+                .append("Débit: <span class=\"debit-val\">").append(escapeHtml(payload.totalDebit())).append("</span>")
+                .append(" &nbsp; Crédit: <span class=\"credit-val\">").append(escapeHtml(payload.totalCredit())).append("</span>")
+                .append(" &nbsp; Solde: ").append(escapeHtml(payload.solde()))
+                .append(payload.balanced() ? " (Equilibre)" : "")
+                .append("</div>")
+                .append("<table><thead><tr>")
+                .append("<th>Numéro</th><th>Date</th><th>Journal</th><th>N° Compte</th><th>Libellé</th><th>Débit</th><th>Crédit</th>")
+                .append("</tr></thead><tbody>");
+        for (JournalEntryRow row : payload.entries()) {
+            boolean hasDebit = row.debit() != null && row.debit().compareTo(BigDecimal.ZERO) > 0;
+            boolean hasCredit = row.credit() != null && row.credit().compareTo(BigDecimal.ZERO) > 0;
+            html.append("<tr>")
+                    .append("<td class=\"num\">").append(row.numero()).append("</td>")
+                    .append("<td>").append(escapeHtml(row.date())).append("</td>")
+                    .append("<td>").append(escapeHtml(row.journal())).append("</td>")
+                    .append("<td>").append(escapeHtml(row.compte())).append("</td>")
+                    .append("<td>").append(escapeHtml(row.libelle())).append("</td>")
+                    .append("<td class=\"").append(hasDebit ? "debit" : "dash").append("\">")
+                    .append(hasDebit ? escapeHtml(formatAmount(row.debit())) : "-").append("</td>")
+                    .append("<td class=\"").append(hasCredit ? "credit" : "dash").append("\">")
+                    .append(hasCredit ? escapeHtml(formatAmount(row.credit())) : "-").append("</td>")
+                    .append("</tr>");
+        }
+        html.append("</tbody></table>")
+                .append("<script>window.onload=function(){window.print();}</script>")
+                .append("</body></html>");
+        return html.toString();
+    }
+
+    private Long resolveEffectiveDossierId(Long requestedDossierId, HttpSession session) {
+        if (requestedDossierId != null) {
+            session.setAttribute(SessionKeys.ACTIVE_DOSSIER_ID, requestedDossierId);
+            return requestedDossierId;
+        }
+        if (session == null) return null;
+        Object rawId = session.getAttribute(SessionKeys.ACTIVE_DOSSIER_ID);
+        if (rawId == null) return null;
+        try {
+            return Long.valueOf(rawId.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     @PostMapping("/{statementId}/export")
@@ -137,14 +338,37 @@ public class JournalController {
         if (statementId == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "statementId est obligatoire."));
         }
+        // Try journal_entry cache first
         JournalBatch batch = journalBatchRepository.findByStatementId(statementId).orElse(null);
-        if (batch == null) {
-            return ResponseEntity.ok(Map.of("entries", List.of()));
+        if (batch != null) {
+            List<JournalEntry> entries = journalEntryRepository.findByBatchIdOrderByNumeroAscIdAsc(batch.getId());
+            if (!entries.isEmpty()) {
+                List<JournalEntryRow> rows = new ArrayList<>(entries.size());
+                for (JournalEntry entry : entries) {
+                    rows.add(JournalEntryRow.fromJournalEntry(entry));
+                }
+                return ResponseEntity.ok(Map.of("entries", rows));
+            }
         }
-        List<JournalEntry> entries = journalEntryRepository.findByBatchIdOrderByNumeroAscIdAsc(batch.getId());
-        List<JournalEntryRow> rows = new ArrayList<>(entries.size());
-        for (JournalEntry entry : entries) {
-            rows.add(JournalEntryRow.fromJournalEntry(entry));
+        // Fallback: read directly from accounting_entries (no lazy-load risk, no side effects)
+        List<AccountingEntry> accountingEntries =
+                accountingEntryRepository.findBySourceStatementIdOrderByNumeroAscIdAsc(statementId);
+        List<JournalEntryRow> rows = new ArrayList<>(accountingEntries.size());
+        for (AccountingEntry e : accountingEntries) {
+            String date = e.getDateComplete() != null ? e.getDateComplete().format(DATE_FORMAT) : "";
+            rows.add(new JournalEntryRow(
+                    e.getNumero() != null ? e.getNumero() : 0L,
+                    e.getMois(),
+                    e.getNmois() != null ? e.getNmois() : 0,
+                    date,
+                    e.getNdosjrn(),
+                    e.getNcompte(),
+                    e.getEcriture(),
+                    e.getDebit(),
+                    e.getCredit(),
+                    e.getSourceTransactionId(),
+                    Boolean.TRUE.equals(e.getIsCounterpart())
+            ));
         }
         return ResponseEntity.ok(Map.of("entries", rows));
     }
@@ -156,15 +380,28 @@ public class JournalController {
         JournalBatch existing = journalBatchRepository.findByStatementId(statementId).orElse(null);
         if (existing != null) {
             List<JournalEntry> entries = journalEntryRepository.findByBatchIdOrderByNumeroAscIdAsc(existing.getId());
-            if (entries.isEmpty()) {
+            List<JournalRow> rows;
+            if (!entries.isEmpty()) {
+                rows = new ArrayList<>(entries.size());
+                for (JournalEntry entry : entries) {
+                    rows.add(JournalRow.fromJournalEntry(entry));
+                }
+            } else {
+                // journal_entry is empty: fallback to accounting_entries (no lazy-load risk)
                 BankStatement statement = bankStatementRepository.findById(statementId)
                         .orElseThrow(() -> new IllegalArgumentException("Relevé introuvable."));
-                ensureJournalEntries(existing, statement, userId);
-                entries = journalEntryRepository.findByBatchIdOrderByNumeroAscIdAsc(existing.getId());
-            }
-            List<JournalRow> rows = new ArrayList<>(entries.size());
-            for (JournalEntry entry : entries) {
-                rows.add(JournalRow.fromJournalEntry(entry));
+                List<AccountingEntry> accountingEntries =
+                        accountingEntryRepository.findBySourceStatementIdOrderByNumeroAscIdAsc(statementId);
+                if (accountingEntries.isEmpty()) {
+                    // Statement not comptabilisé yet: simulate + confirm, then re-fetch entries
+                    ComptabilisationWorkflowService.SimulationResult sim = workflowService.simulate(statementId);
+                    workflowService.confirm(sim.simulationId(), userId);
+                    accountingEntries = accountingEntryRepository.findBySourceStatementIdOrderByNumeroAscIdAsc(statementId);
+                }
+                rows = new ArrayList<>(accountingEntries.size());
+                for (AccountingEntry e : accountingEntries) {
+                    rows.add(JournalRow.fromAccountingEntry(e));
+                }
             }
             String exportFilename = buildExportFilename(existing);
             return new JournalExportPayload(existing, rows, exportFilename);
@@ -450,5 +687,16 @@ public class JournalController {
                     Boolean.TRUE.equals(entry.getIsCounterpart())
             );
         }
+    }
+
+    private record AllEntriesPayload(
+            List<JournalEntryRow> entries,
+            String totalDebit,
+            String totalCredit,
+            String solde,
+            boolean balanced,
+            List<Integer> availableYears,
+            List<String> availableJournals
+    ) {
     }
 }

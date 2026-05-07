@@ -384,7 +384,8 @@ public class ClientDashboardController {
         if (statement == null || statement.getStatus() == null) {
             return false;
         }
-        return statement.getStatus() != BankStatus.COMPTABILISE
+        return statement.getStatus() != BankStatus.VALIDATED
+                && statement.getStatus() != BankStatus.COMPTABILISE
                 && statement.getStatus() != BankStatus.ERROR
                 && statement.getStatus() != BankStatus.DUPLIQUE;
     }

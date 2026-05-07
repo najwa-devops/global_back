@@ -158,7 +158,7 @@ public class CentreMonetiqueController {
             }
 
             List<CentreMonetiqueBatchSummaryDTO> batches = workflowService.list(limit, resolvedDossierId);
-            if (sessionUser.isComptable() && !sessionUser.isAdmin()) {
+            if (!sessionUser.isClient()) {
                 batches = batches.stream()
                         .filter(batch -> Boolean.TRUE.equals(batch.getClientValidated()))
                         .toList();

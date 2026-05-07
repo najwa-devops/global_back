@@ -56,9 +56,7 @@ public class TesseractConfigService {
         }
 
         tesseract.setOcrEngineMode(1);
-        tesseract.setTessVariable("preserve_interword_spaces", "1");
-        tesseract.setTessVariable("user_defined_dpi", "320");
-        tesseract.setTessVariable("textord_heavy_nr", "1");
+        applyCommonVariables(tesseract, "1", "320", "1");
         return tesseract;
     }
 
@@ -85,9 +83,7 @@ public class TesseractConfigService {
         tesseract.setLanguage(a4Language);
         tesseract.setOcrEngineMode(1);
         tesseract.setPageSegMode(attemptNumber <= 0 ? 4 : 6);
-        tesseract.setTessVariable("preserve_interword_spaces", "1");
-        tesseract.setTessVariable("user_defined_dpi", "300");
-        tesseract.setTessVariable("textord_heavy_nr", "1");
+        applyCommonVariables(tesseract, "1", "300", "1");
         log.info("Config Tesseract A4 bad-scan: lang={}, PSM={}, OEM=1, DPI=300",
                 a4Language, attemptNumber <= 0 ? 4 : 6);
         return tesseract;
@@ -96,36 +92,36 @@ public class TesseractConfigService {
     private void configureDefault(Tesseract tesseract) {
         tesseract.setPageSegMode(6);
         tesseract.setOcrEngineMode(1);
-        tesseract.setTessVariable("preserve_interword_spaces", "1");
-        tesseract.setTessVariable("user_defined_dpi", "300");
-        tesseract.setTessVariable("textord_heavy_nr", "1");
+        applyCommonVariables(tesseract, "1", "300", "1");
     }
 
     private void configureFallback(Tesseract tesseract) {
         tesseract.setPageSegMode(3);
         tesseract.setOcrEngineMode(1);
-        tesseract.setTessVariable("preserve_interword_spaces", "1");
-        tesseract.setTessVariable("user_defined_dpi", "300");
-        tesseract.setTessVariable("textord_heavy_nr", "1");
+        applyCommonVariables(tesseract, "1", "300", "1");
     }
 
     private void configureFastImageDefault(Tesseract tesseract) {
         tesseract.setPageSegMode(11);
         tesseract.setOcrEngineMode(1);
-        tesseract.setTessVariable("preserve_interword_spaces", "0");
-        tesseract.setTessVariable("user_defined_dpi", "220");
-        tesseract.setTessVariable("textord_heavy_nr", "0");
-        tesseract.setTessVariable("load_system_dawg", "0");
-        tesseract.setTessVariable("load_freq_dawg", "0");
+        applyFastImageVariables(tesseract, "0", "220", "0");
     }
 
     private void configureFastImageFallback(Tesseract tesseract) {
         tesseract.setPageSegMode(6);
         tesseract.setOcrEngineMode(1);
-        tesseract.setTessVariable("preserve_interword_spaces", "0");
-        tesseract.setTessVariable("user_defined_dpi", "220");
-        tesseract.setTessVariable("textord_heavy_nr", "0");
-        tesseract.setTessVariable("load_system_dawg", "0");
-        tesseract.setTessVariable("load_freq_dawg", "0");
+        applyFastImageVariables(tesseract, "0", "220", "0");
+    }
+
+    private void applyCommonVariables(Tesseract tesseract, String preserveInterwordSpaces, String dpi, String heavyNoiseReduction) {
+        tesseract.setVariable("preserve_interword_spaces", preserveInterwordSpaces);
+        tesseract.setVariable("user_defined_dpi", dpi);
+        tesseract.setVariable("textord_heavy_nr", heavyNoiseReduction);
+    }
+
+    private void applyFastImageVariables(Tesseract tesseract, String preserveInterwordSpaces, String dpi, String heavyNoiseReduction) {
+        applyCommonVariables(tesseract, preserveInterwordSpaces, dpi, heavyNoiseReduction);
+        tesseract.setVariable("load_system_dawg", "0");
+        tesseract.setVariable("load_freq_dawg", "0");
     }
 }

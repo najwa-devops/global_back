@@ -191,7 +191,7 @@ public interface DynamicInvoiceDao extends JpaRepository<DynamicInvoice, Long> {
             @Param("supplier") String supplier,
             @Param("invoiceDate") Date invoiceDate);
 
-    @Query(value = "SELECT COUNT(*) > 0 FROM dynamic_invoice " +
+    @Query(value = "SELECT COUNT(*) FROM dynamic_invoice " +
             "WHERE dossier_id = :dossierId " +
             "AND status = 'VALIDATED' " +
             "AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(fields_data, '$.supplier')))) = LOWER(TRIM(:supplier)) " +
@@ -201,7 +201,7 @@ public interface DynamicInvoiceDao extends JpaRepository<DynamicInvoice, Long> {
             "OR LOWER(TRIM(original_name)) = LOWER(TRIM(:searchValue))" +
             ")",
             nativeQuery = true)
-    boolean existsValidatedDuplicateBySupplierAndInvoiceOrFilename(
+    Long existsValidatedDuplicateBySupplierAndInvoiceOrFilename(
             @Param("dossierId") Long dossierId,
             @Param("supplier") String supplier,
             @Param("searchValue") String searchValue);
