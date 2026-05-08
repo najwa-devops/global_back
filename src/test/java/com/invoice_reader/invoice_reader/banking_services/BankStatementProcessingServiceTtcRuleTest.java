@@ -22,22 +22,35 @@ class BankStatementProcessingServiceTtcRuleTest {
         statement.setId(42L);
         statement.setApplyTtcRule(true);
 
+        // Le libellé doit commencer par "COMMISSION" pour que containsCommission() matche
+        // (pattern : ^\\s*COMM?ISSIONS?\\b)
         BankTransaction commissionTx = new BankTransaction();
         commissionTx.setStatement(statement);
-        commissionTx.setLibelle("FRAIS COMMISSION CARTE");
+        commissionTx.setLibelle("COMMISSION FRAIS CARTE");
         commissionTx.setDebit(new BigDecimal("110.00"));
         commissionTx.setCredit(BigDecimal.ZERO);
         commissionTx.setSens("DEBIT");
 
         List<BankTransaction> result = invokeSplit(service, statement, List.of(commissionTx));
 
-        assertEquals(2, result.size());
-        assertSame(statement, result.get(0).getStatement());
+        // Le split TTC crée 3 lignes : HT (charge), TVA, et ligne banque principale (contrepartie)
+        assertEquals(3, result.size());
+
+        // Ligne 1 : montant HT → 110 / 1.1 = 100.00
+        assertEquals("COMMISSION HT", result.get(0).getLibelle());
         assertEquals(new BigDecimal("100.00"), result.get(0).getDebit());
-        assertEquals("FRAIS COMMISSION CARTE", result.get(0).getLibelle());
+        assertSame(statement, result.get(0).getStatement());
+
+        // Ligne 2 : TVA → 110 - 100 = 10.00
+        assertEquals("TVA SUR COMMISSION", result.get(1).getLibelle());
         assertEquals(new BigDecimal("10.00"), result.get(1).getDebit());
-        assertEquals("COMMISSION", result.get(1).getLibelle());
         assertSame(statement, result.get(1).getStatement());
+
+        // Ligne 3 : transaction d'origine transformée en contrepartie banque (crédit = TTC)
+        assertEquals("COMMISSION FRAIS CARTE", result.get(2).getLibelle());
+        assertEquals(new BigDecimal("110.00"), result.get(2).getCredit());
+        assertEquals(BigDecimal.ZERO.setScale(2), result.get(2).getDebit());
+        assertSame(statement, result.get(2).getStatement());
     }
 
     private static BankStatementProcessingService newService() throws Exception {

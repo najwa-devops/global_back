@@ -37,7 +37,7 @@ jobs:
           cache: maven
 
       - name: Run unit tests
-        run: mvn test -Dmaven.test.failure.ignore=true --no-transfer-progress
+        run: mvn test --no-transfer-progress
         env:
           DATABASE_URL: jdbc:mariadb://localhost:3306/invoice_db_test?createDatabaseIfNotExist=true
           DATABASE_USERNAME: root

@@ -265,6 +265,13 @@ public class SmartNumericClassifier implements NumericClassifier {
                 || containsHint(upper, normalizedUpper, "COMMISSION")) {
             debitScore += 2;
         }
+        // "FRAIS SUR REMISE ..." / "FRAIS REMISE ..." = frais bancaires facturés sur une remise de chèque.
+        // Même si la description contient "REMISE CHEQUE" (hint crédit), le préfixe "FRAIS" indique
+        // une charge débitée au client. On force DÉBIT avec un score élevé.
+        if (containsHint(upper, normalizedUpper, "FRAIS SUR REMISE")
+                || containsHint(upper, normalizedUpper, "FRAIS REMISE")) {
+            debitScore += 6;
+        }
         if (containsHint(upper, normalizedUpper, "VIREMENT EMIS")
                 || containsHint(upper, normalizedUpper, "VIR.EMIS")
                 || containsHint(upper, normalizedUpper, "DIRECT DEBIT")) {

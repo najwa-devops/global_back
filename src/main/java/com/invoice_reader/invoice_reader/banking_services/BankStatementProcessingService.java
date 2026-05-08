@@ -939,6 +939,7 @@ public class BankStatementProcessingService {
 
     private BankTransaction cloneForSplit(BankTransaction source) {
         BankTransaction clone = new BankTransaction();
+        clone.setStatement(source.getStatement());
         clone.setTransactionIndex(source.getTransactionIndex());
         clone.setDateOperation(source.getDateOperation());
         clone.setDateValeur(source.getDateValeur());

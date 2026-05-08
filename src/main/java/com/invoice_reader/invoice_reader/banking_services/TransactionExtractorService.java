@@ -76,7 +76,8 @@ public class TransactionExtractorService {
             return new ArrayList<>();
         }
 
-        BankType bankType = bankDetector.detectBankType(ocrText);
+        BankType detectedBankType = bankDetector.detectBankType(ocrText);
+        BankType bankType = detectedBankType;
 
         if (manualBankType != null && !manualBankType.equalsIgnoreCase("AUTO")) {
             BankType manualType = mapManualType(manualBankType);
@@ -105,6 +106,19 @@ public class TransactionExtractorService {
 
         if (!extracted.isEmpty()) {
             return extracted;
+        }
+
+        // Si la banque était spécifiée manuellement et que l'extraction échoue, on retente
+        // avec la banque auto-détectée (cas où le type manuel est incorrect).
+        if (bankType != detectedBankType) {
+            log.warn("Universal extractor returned 0 transactions for bank {}. Retrying with detected bank {}.",
+                    bankType, detectedBankType);
+            extracted = universalEngine.extract(
+                    textWithoutHeaderFooter,
+                    new TransactionExtractionContext(detectedBankType, resolvedMonth, resolvedYear, twoColumnLayout));
+            if (!extracted.isEmpty()) {
+                return extracted;
+            }
         }
 
         log.warn("Universal extractor returned 0 transactions for bank {}. Falling back to parserFactory.", bankType);
