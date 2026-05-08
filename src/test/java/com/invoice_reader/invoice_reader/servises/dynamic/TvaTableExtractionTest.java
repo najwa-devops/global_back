@@ -1,25 +1,27 @@
 package com.invoice_reader.invoice_reader.servises.dynamic;
 
+import com.invoice_reader.invoice_reader.servises.ocr.TextCleaningService;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * Test pour l'extraction des montants depuis les tableaux de TVA
- * Cas des factures type SOREMED avec structure:
- * | TAUX | MONTANT TTC | DONT TAXE | MONTANT HT |
- * | 20   | 6866.94     | 1144.49   | 5722.45    |
- */
 @Slf4j
+@ExtendWith(MockitoExtension.class)
 class TvaTableExtractionTest {
+
+    @Mock
+    private TextCleaningService textCleaningService;
 
     private DynamicFieldExtractorService extractor;
 
     @BeforeEach
     void setUp() {
-        extractor = new DynamicFieldExtractorService();
+        extractor = new DynamicFieldExtractorService(textCleaningService);
     }
 
     @Test

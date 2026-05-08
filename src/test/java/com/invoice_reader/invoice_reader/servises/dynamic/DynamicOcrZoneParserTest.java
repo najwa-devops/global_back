@@ -1,14 +1,27 @@
 package com.invoice_reader.invoice_reader.servises.dynamic;
 
+import com.invoice_reader.invoice_reader.servises.ocr.TextCleaningService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+@ExtendWith(MockitoExtension.class)
 class DynamicOcrZoneParserTest {
 
-    private final DynamicFieldExtractorService extractorService = new DynamicFieldExtractorService();
+    @Mock
+    private TextCleaningService textCleaningService;
+
+    private DynamicFieldExtractorService extractorService;
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUp() {
+        extractorService = new DynamicFieldExtractorService(textCleaningService);
+    }
 
     @Test
     void extractWithoutTemplate_givenUserRegexLabels_whenExtract_thenFindExpectedValues() {
