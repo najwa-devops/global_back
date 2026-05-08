@@ -11,6 +11,20 @@ jobs:
     name: Tests & Couverture
     runs-on: ubuntu-latest
 
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_DATABASE: invoice_db_test
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,6 +38,11 @@ jobs:
 
       - name: Run unit tests
         run: mvn test --no-transfer-progress
+        env:
+          DATABASE_URL: jdbc:mariadb://localhost:3306/invoice_db_test?createDatabaseIfNotExist=true
+          DATABASE_USERNAME: root
+          DATABASE_PASSWORD: root
+          SPRING_PROFILES_ACTIVE: docker
 
       - name: Generate JaCoCo coverage report
         run: mvn jacoco:report --no-transfer-progress
