@@ -155,6 +155,9 @@ public class BankStatementController {
             statement.setMonth(null);
             statement.setYear(null);
 
+            if (sessionUser != null && sessionUser.isAdmin()) {
+                statement.clientValidate(sessionUser.username());
+            }
             BankStatement saved = repository.save(statement);
             log.info("✅ Relevé créé: ID={}", saved.getId());
 

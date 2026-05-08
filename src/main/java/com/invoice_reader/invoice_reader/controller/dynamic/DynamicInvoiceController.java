@@ -106,6 +106,11 @@ public class DynamicInvoiceController {
                         file,
                         resolvedDossierId,
                         resolveExtractionEngine(engine, ocrMode, useAlphaAgent));
+                if (sessionUser.isAdmin()) {
+                    processed.setClientValidated(true);
+                    processed.setClientValidatedAt(java.time.LocalDateTime.now());
+                    processed.setClientValidatedBy(sessionUser.username());
+                }
             }
 
             if (dossier != null) {
@@ -210,6 +215,11 @@ public class DynamicInvoiceController {
                                 file,
                                 resolvedDossierId,
                                 resolveExtractionEngine(engine, ocrMode, useAlphaAgent));
+                if (!sessionUser.isClient() && sessionUser.isAdmin()) {
+                    processed.setClientValidated(true);
+                    processed.setClientValidatedAt(java.time.LocalDateTime.now());
+                    processed.setClientValidatedBy(sessionUser.username());
+                }
 
                 String invoiceNumber = processed != null && processed.getFieldsData() != null
                         ? getStringValue(processed.getFieldsData(), "invoiceNumber")

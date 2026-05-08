@@ -104,6 +104,11 @@ public class SalesInvoiceController {
                         file,
                         resolvedDossierId,
                         ExtractionEngine.resolve(engine, ocrMode, useAlphaAgent));
+                if (sessionUser.isAdmin()) {
+                    processed.setClientValidated(true);
+                    processed.setClientValidatedAt(java.time.LocalDateTime.now());
+                    processed.setClientValidatedBy(sessionUser.username());
+                }
             }
 
             if (dossier != null) {
@@ -211,6 +216,11 @@ public class SalesInvoiceController {
                                 file,
                                 resolvedDossierId,
                                 ExtractionEngine.resolve(engine, ocrMode, useAlphaAgent));
+                if (!sessionUser.isClient() && sessionUser.isAdmin()) {
+                    processed.setClientValidated(true);
+                    processed.setClientValidatedAt(java.time.LocalDateTime.now());
+                    processed.setClientValidatedBy(sessionUser.username());
+                }
 
                 if (dossier != null) {
                     processed.setDossier(dossier);

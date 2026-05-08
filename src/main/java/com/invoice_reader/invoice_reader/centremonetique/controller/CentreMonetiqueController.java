@@ -95,6 +95,9 @@ public class CentreMonetiqueController {
 
             CentreMonetiqueBatchDetailDTO detail = workflowService.uploadAndExtract(
                     file, year, CentreMonetiqueStructureType.fromNullable(structure), rib, resolvedDossierId);
+            if (sessionUser.isAdmin()) {
+                workflowService.clientValidate(detail.getId(), resolvedDossierId, sessionUser.username());
+            }
             return ResponseEntity.status(HttpStatus.CREATED).body(new CentreMonetiqueUploadResponseDTO(
                     "Extraction terminee",
                     detail,
