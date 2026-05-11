@@ -5,6 +5,7 @@ import com.invoice_reader.invoice_reader.repository.AccountDao;
 import com.invoice_reader.invoice_reader.banking_services.ExternalComptesCatalogService;
 import com.invoice_reader.invoice_reader.entity.auth.UserRole;
 import com.invoice_reader.invoice_reader.security.RequireRole;
+import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -21,23 +22,39 @@ import java.util.Map;
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*")
 @RequireRole({UserRole.ADMIN, UserRole.COMPTABLE, UserRole.CLIENT})
+@Slf4j
 public class AccountingAccountController {
 
     private final AccountDao accountDao;
     private final ExternalComptesCatalogService externalComptesCatalogService;
 
+    private List<Account> loadAccountsWithFallback(boolean activeOnly, String context) {
+        try {
+            List<Account> externalAccounts = externalComptesCatalogService.loadAccounts();
+            if (externalAccounts != null && !externalAccounts.isEmpty()) {
+                return externalAccounts;
+            }
+            log.warn("Catalogue comptes distant vide pour {}, fallback sur la table locale accounts", context);
+        } catch (Exception e) {
+            log.warn("Catalogue comptes distant indisponible pour {}, fallback sur la table locale accounts: {}", context, e.getMessage());
+        }
+
+        return activeOnly
+                ? accountDao.findByActiveTrueOrderByCodeAsc()
+                : accountDao.findAllByOrderByCodeAsc();
+    }
+
+    private java.util.stream.Stream<AccountOption> toOptions(List<Account> accounts) {
+        if (accounts == null) {
+            return java.util.stream.Stream.empty();
+        }
+        return accounts.stream()
+                .map(account -> new AccountOption(account.getCode(), account.getLibelle()));
+    }
+
     @GetMapping
     public ResponseEntity<?> list(@RequestParam(defaultValue = "true") boolean activeOnly) {
-        // Source active: table distante "Comptes" (numero, libelle) sur le serveur externe.
-        // Fallback: table locale si la source distante est indisponible.
-        List<Account> accounts;
-        try {
-            accounts = externalComptesCatalogService.loadAccounts();
-        } catch (Exception e) {
-            accounts = activeOnly
-                    ? accountDao.findByActiveTrueOrderByCodeAsc()
-                    : accountDao.findAllByOrderByCodeAsc();
-        }
+        List<Account> accounts = loadAccountsWithFallback(activeOnly, "/accounts");
 
         // Source locale historique (gardée commentée, ne pas supprimer):
         // List<Account> accounts = activeOnly
@@ -48,63 +65,32 @@ public class AccountingAccountController {
 
     @GetMapping("/charges")
     public ResponseEntity<?> chargeAccounts() {
-        List<Account> all;
-        try {
-            all = externalComptesCatalogService.loadAccounts();
-        } catch (Exception e) {
-            all = accountDao.findByActiveTrueOrderByCodeAsc();
-        }
-        List<AccountOption> options = all.stream()
-                .filter(a -> a.getCode() != null && a.getCode().startsWith("6"))
-                .map(a -> new AccountOption(a.getCode(), a.getLibelle()))
+        List<AccountOption> options = toOptions(loadAccountsWithFallback(true, "/charges"))
+                .filter(a -> a.code() != null && a.code().startsWith("6"))
                 .toList();
         return ResponseEntity.ok(Map.of("count", options.size(), "accounts", options));
     }
 
     @GetMapping("/tva")
     public ResponseEntity<?> tvaAccounts() {
-        List<Account> all;
-        try {
-            all = externalComptesCatalogService.loadAccounts();
-        } catch (Exception e) {
-            all = accountDao.findByActiveTrueOrderByCodeAsc();
-        }
-        List<AccountOption> options = all.stream()
-                .filter(a -> a.getCode() != null && (a.getCode().startsWith("3455") || a.getCode().startsWith("4455")))
-                .map(a -> new AccountOption(a.getCode(), a.getLibelle()))
+        List<AccountOption> options = toOptions(loadAccountsWithFallback(true, "/tva"))
+                .filter(a -> a.code() != null && (a.code().startsWith("3455") || a.code().startsWith("4455")))
                 .toList();
         return ResponseEntity.ok(Map.of("count", options.size(), "accounts", options));
     }
 
     @GetMapping("/fournisseurs")
     public ResponseEntity<?> fournisseurAccounts() {
-        List<Account> all;
-        try {
-            all = externalComptesCatalogService.loadAccounts();
-        } catch (Exception e) {
-            all = accountDao.findByActiveTrueOrderByCodeAsc();
-        }
-        List<AccountOption> options = all.stream()
-                .filter(a -> a.getCode() != null && a.getCode().startsWith("441"))
-                .map(a -> new AccountOption(a.getCode(), a.getLibelle()))
+        List<AccountOption> options = toOptions(loadAccountsWithFallback(true, "/fournisseurs"))
+                .filter(a -> a.code() != null && a.code().startsWith("441"))
                 .toList();
         return ResponseEntity.ok(Map.of("count", options.size(), "accounts", options));
     }
 
     @GetMapping("/options")
     public ResponseEntity<?> options() {
-        List<AccountOption> options;
-        try {
-            options = externalComptesCatalogService.loadAccounts()
-                .stream()
-                .map(account -> new AccountOption(account.getCode(), account.getLibelle()))
+        List<AccountOption> options = toOptions(loadAccountsWithFallback(true, "/options"))
                 .toList();
-        } catch (Exception e) {
-            options = accountDao.findByActiveTrueOrderByCodeAsc()
-                    .stream()
-                    .map(account -> new AccountOption(account.getCode(), account.getLibelle()))
-                    .toList();
-        }
 
         // Source locale historique (gardée commentée, ne pas supprimer):
         // List<AccountOption> options = accountDao.findByActiveTrueOrderByCodeAsc()

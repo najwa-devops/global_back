@@ -25,6 +25,10 @@ public class CptjournalJdbcRepository {
         return value == null ? 0L : value;
     }
 
+    public void deleteAll() {
+        jdbcTemplate.update("DELETE FROM Cptjournal");
+    }
+
     public void insertAll(List<CptjournalRow> rows) {
         if (rows == null || rows.isEmpty()) {
             return;

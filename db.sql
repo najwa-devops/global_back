@@ -298,3 +298,79 @@ CREATE TABLE field_learning_data (
     CONSTRAINT chk_field_learning_status
         CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'AUTO_APPROVED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- Plan Comptable Marocain - Comptes de base
+-- Note: colonnes JPA -> numero (code), liv (active), taux (tvaRate)
+-- ============================================================
+INSERT IGNORE INTO accounts (numero, libelle, classe, taux, liv) VALUES
+
+-- Classe 3 : Actif circulant
+('3421000', 'Clients', 3, NULL, b'1'),
+('3423000', 'Clients - effets à recevoir', 3, NULL, b'1'),
+('3441000', 'Personnel - avances et acomptes', 3, NULL, b'1'),
+('3451000', 'État - subventions à recevoir', 3, NULL, b'1'),
+('3455200', 'TVA récupérable sur charges', 3, NULL, b'1'),
+('345520100', 'TVA récupérable sur commissions', 3, NULL, b'1'),
+('345520106', 'TVA récupérable sur frais bancaires', 3, NULL, b'1'),
+('3456000', 'État - autres créances', 3, NULL, b'1'),
+('3461000', 'Associés - comptes courants débiteurs', 3, NULL, b'1'),
+('3481000', 'Charges constatées avance', 3, NULL, b'1'),
+('349700000', 'Clients - virements et opérations diverses', 3, NULL, b'1'),
+
+-- Classe 4 : Passif circulant
+('4411000', 'Fournisseurs', 4, NULL, b'1'),
+('4413000', 'Fournisseurs - effets à payer', 4, NULL, b'1'),
+('4417000', 'Fournisseurs - dettes en litige', 4, NULL, b'1'),
+('441700000', 'Fournisseurs divers', 4, NULL, b'1'),
+('4421000', 'Personnel - rémunérations dues', 4, NULL, b'1'),
+('4432000', 'Associés - comptes courants', 4, NULL, b'1'),
+('4441000', 'État - impôt sur les sociétés', 4, NULL, b'1'),
+('4443000', 'État - impôt sur le revenu', 4, NULL, b'1'),
+('4455200', 'TVA facturée sur ventes', 4, NULL, b'1'),
+('4456000', 'État - TVA collectée', 4, NULL, b'1'),
+('4458000', 'État - TVA due', 4, NULL, b'1'),
+('4481000', 'Produits constatés avance', 4, NULL, b'1'),
+
+-- Classe 5 : Trésorerie
+('5141000', 'Banques - soldes débiteurs', 5, NULL, b'1'),
+('514100000', 'Banque principale', 5, NULL, b'1'),
+('5142000', 'Chèques postaux', 5, NULL, b'1'),
+('5143000', 'Trésorerie générale', 5, NULL, b'1'),
+('5145000', 'Virement de fonds', 5, NULL, b'1'),
+('5149000', 'Intérêts courus sur comptes bancaires', 5, NULL, b'1'),
+('5161000', 'Caisse', 5, NULL, b'1'),
+
+-- Classe 6 : Charges
+('6111000', 'Achats de matières premières', 6, 20.0, b'1'),
+('6121000', 'Achats de matières consommables', 6, 20.0, b'1'),
+('6131000', 'Achats de travaux et prestations de services', 6, 20.0, b'1'),
+('6141000', 'Locations et charges locatives', 6, 20.0, b'1'),
+('6142000', 'Redevances de crédit-bail', 6, 20.0, b'1'),
+('6143000', 'Entretien et réparations', 6, 20.0, b'1'),
+('6144000', 'Primes assurances', 6, 14.0, b'1'),
+('6146000', 'Honoraires et commissions', 6, 20.0, b'1'),
+('6147000', 'Publicité et relations publiques', 6, 20.0, b'1'),
+('6148000', 'Transports', 6, 20.0, b'1'),
+('6149000', 'Déplacements et missions', 6, 20.0, b'1'),
+('6161000', 'Frais postaux et télécommunications', 6, 20.0, b'1'),
+('6162000', 'Cotisations et dons', 6, NULL, b'1'),
+('6165000', 'Frais de gardiennage et sécurité', 6, 20.0, b'1'),
+('6167000', 'Frais de contentieux', 6, 20.0, b'1'),
+('6168000', 'Autres charges exploitation', 6, 20.0, b'1'),
+('6170000', 'Frais bancaires et agios', 6, 20.0, b'1'),
+('614700000', 'Frais bancaires HT', 6, 20.0, b'1'),
+('6341000', 'Intérêts des emprunts et dettes', 6, NULL, b'1'),
+('6342000', 'Intérêts comptes courants bancaires agios', 6, NULL, b'1'),
+('6343000', 'Commissions et frais bancaires', 6, 20.0, b'1'),
+('6386000', 'Pertes de change', 6, NULL, b'1'),
+
+-- Classe 7 : Produits
+('7111000', 'Ventes de marchandises', 7, 20.0, b'1'),
+('7121000', 'Ventes de biens produits', 7, 20.0, b'1'),
+('7122000', 'Travaux facturés', 7, 20.0, b'1'),
+('7123000', 'Services vendus', 7, 20.0, b'1'),
+('7141000', 'Travaux faits pour entreprise', 7, NULL, b'1'),
+('7191000', 'Subventions exploitation', 7, NULL, b'1'),
+('7386000', 'Gains de change', 7, NULL, b'1'),
+('7481000', 'Produits divers', 7, NULL, b'1');

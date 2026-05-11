@@ -25,5 +25,9 @@ public class CptjournalSyncTrackerRepository {
                 ON DUPLICATE KEY UPDATE synced_at = VALUES(synced_at)
                 """, statementId);
     }
+
+    public void deleteAll() {
+        jdbcTemplate.update("DELETE FROM cptjournal_sync_tracker");
+    }
 }
 

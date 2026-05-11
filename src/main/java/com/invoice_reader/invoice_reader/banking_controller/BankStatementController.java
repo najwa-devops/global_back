@@ -2,9 +2,14 @@ package com.invoice_reader.invoice_reader.banking_controller;
 
 import com.invoice_reader.invoice_reader.banking_services.*;
 import com.invoice_reader.invoice_reader.banking_repository.AccountingEntryRepository;
+import com.invoice_reader.invoice_reader.banking_repository.CptjournalJdbcRepository;
+import com.invoice_reader.invoice_reader.banking_repository.CptjournalSyncTrackerRepository;
 import com.invoice_reader.invoice_reader.banking_entity.BankStatement;
 import com.invoice_reader.invoice_reader.banking_entity.BankStatus;
 import com.invoice_reader.invoice_reader.banking_entity.BankTransaction;
+import com.invoice_reader.invoice_reader.banking_entity.JournalBatch;
+import com.invoice_reader.invoice_reader.banking_repository.JournalBatchRepository;
+import com.invoice_reader.invoice_reader.banking_repository.JournalEntryRepository;
 import com.invoice_reader.invoice_reader.banking_repository.BankStatementRepository;
 import com.invoice_reader.invoice_reader.banking_repository.BankTransactionRepository;
 import com.invoice_reader.invoice_reader.entity.auth.Dossier;
@@ -59,6 +64,10 @@ public class BankStatementController {
     private final BankStatementRepository repository;
     private final BankTransactionRepository transactionRepository;
     private final AccountingEntryRepository accountingEntryRepository;
+    private final JournalBatchRepository journalBatchRepository;
+    private final JournalEntryRepository journalEntryRepository;
+    private final CptjournalJdbcRepository cptjournalJdbcRepository;
+    private final CptjournalSyncTrackerRepository cptjournalSyncTrackerRepository;
     private final BankStatementProcessingService processingService;
     private final BankStatementValidatorService validatorService;
     private final ComptabilisationWorkflowService comptabilisationWorkflowService;
@@ -411,17 +420,21 @@ public class BankStatementController {
     @Transactional
     @RequireRole({UserRole.ADMIN, UserRole.COMPTABLE})
     public ResponseEntity<?> deleteAll() {
-        long accountedCount = repository.countByStatus(BankStatus.COMPTABILISE);
-        long validatedCount = repository.countByStatus(BankStatus.VALIDATED);
-        long clientValidatedCount = repository.countByClientValidatedTrue();
-        if (accountedCount > 0 || validatedCount > 0 || clientValidatedCount > 0) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
-                    "error", "Suppression impossible: relevés validés ou comptabilisés présents",
-                    "accountedCount", accountedCount,
-                    "validatedCount", validatedCount,
-                    "clientValidatedCount", clientValidatedCount));
-        }
         log.info("🗑️ Suppression de TOUS les relevés bancaires");
+
+        List<BankStatement> statements = repository.findAllOrderByCreatedAtDesc();
+        for (BankStatement statement : statements) {
+            journalBatchRepository.findByStatementId(statement.getId()).ifPresent(batch -> {
+                journalEntryRepository.deleteByBatchId(batch.getId());
+                journalBatchRepository.deleteByStatementId(statement.getId());
+            });
+            transactionRepository.deleteByStatementId(statement.getId());
+        }
+
+        accountingEntryRepository.deleteAllBankEntries();
+        cptjournalSyncTrackerRepository.deleteAll();
+        cptjournalJdbcRepository.deleteAll();
+
         transactionRepository.deleteAllInBatch();
         repository.deleteAllInBatch();
         return ResponseEntity.noContent().build();
