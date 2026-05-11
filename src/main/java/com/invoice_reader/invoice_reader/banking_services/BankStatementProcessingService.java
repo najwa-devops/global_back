@@ -960,6 +960,7 @@ public class BankStatementProcessingService {
         clone.setRawOcrLine(source.getRawOcrLine());
         clone.setReviewNotes(source.getReviewNotes());
         clone.setCmApplied(source.getCmApplied());
+        clone.setCmAppliedUserDisabled(source.getCmAppliedUserDisabled());
         return clone;
     }
 
@@ -1028,8 +1029,9 @@ public class BankStatementProcessingService {
 
     private void applyMetadata(BankStatement statement, MetadataExtractorService.BankStatementMetadata metadata) {
         if (metadata.rib != null) {
-            statement.setRib(metadata.rib);
-            log.debug("RIB: {}", metadata.rib);
+            String normalizedRib = normalizeRibDigits(metadata.rib);
+            statement.setRib(normalizedRib);
+            log.debug("RIB: {}", normalizedRib);
         }
 
         if (metadata.month != null && metadata.month > 0 && metadata.month <= 12) {
@@ -1304,6 +1306,14 @@ public class BankStatementProcessingService {
             return digits;
         }
         return rib.trim().isBlank() ? null : rib.trim();
+    }
+
+    private String normalizeRibDigits(String rib) {
+        if (rib == null) {
+            return null;
+        }
+        String digits = rib.replaceAll("\\D", "");
+        return digits.isBlank() ? null : digits;
     }
 
     private boolean isEmptyStatement(BankStatement statement) {

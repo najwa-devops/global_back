@@ -560,6 +560,17 @@ public class CentreMonetiqueLiaisonService {
                 .stream()
                 .filter(b -> belongsToDossierOrLegacyNull(b.getDossierId(), dossierId))
                 .toList();
+        if (batches.isEmpty()) {
+            String normalizedStatementRib = normalizeRibDigits(rib);
+            List<CentreMonetiqueBatch> fallback = batchRepository.findTop200ByDossierIdOrDossierIdIsNullOrderByCreatedAtDesc(dossierId)
+                    .stream()
+                    .filter(b -> "PROCESSED".equalsIgnoreCase(nvl(b.getStatus())))
+                    .filter(b -> matchesAmexRib(nvl(b.getRib()), normalizedStatementRib))
+                    .toList();
+            if (!fallback.isEmpty()) {
+                batches = fallback;
+            }
+        }
         if (batches.isEmpty()) return List.of();
 
         List<BankTransaction> statementTxs =
@@ -668,7 +679,7 @@ public class CentreMonetiqueLiaisonService {
         List<CmExpansionLineDTO> lines = blockTxs.stream()
                 .map(t -> new CmExpansionLineDTO(date, nvl(t.getReference()), nvl(t.getDcFlag()), toAmount(t.getMontant())))
                 .toList();
-        return new CmExpansionDTO(bankTx.getId(), batch.getId(), nvl(batch.getOriginalName()),
+        return new CmExpansionDTO(bankTx.getId(), batch.getId(), nvl(batch.getOriginalName()), nvl(batch.getStructure()),
                 "TPE N° " + tpe, toAmount(soldeNet),
                 toAmount(commissionHt), toAmount(tvaSurCommissions),
                 lines);
@@ -781,7 +792,7 @@ public class CentreMonetiqueLiaisonService {
                         nvl(t.getDcFlag()), toAmount(t.getMontant())))
                 .toList();
         out.add(new CmExpansionDTO(bankTx.getId(), batch.getId(),
-                nvl(batch.getOriginalName()), reglementLabel,
+                nvl(batch.getOriginalName()), nvl(batch.getStructure()), reglementLabel,
                 toAmount(currentMontant), toAmount(currentCommissionHt), toAmount(currentTvaSurCommissions), lines));
     }
 
@@ -889,7 +900,7 @@ public class CentreMonetiqueLiaisonService {
             }
 
             result.add(new CmExpansionDTO(
-                    bankTx.getId(), batch.getId(), nvl(batch.getOriginalName()),
+                    bankTx.getId(), batch.getId(), nvl(batch.getOriginalName()), nvl(batch.getStructure()),
                     "VPS", toAmount(creditDebit), toAmount(commHt), toAmount(tva), lines));
         }
         return result;
@@ -1084,7 +1095,7 @@ public class CentreMonetiqueLiaisonService {
         String ref = nvl(settlementRef).trim();
         String cmRef = "AMEX" + (ref.isBlank() ? "" : " / " + ref);
         return new CmExpansionDTO(
-                bankTx.getId(), batch.getId(), nvl(batch.getOriginalName()),
+                bankTx.getId(), batch.getId(), nvl(batch.getOriginalName()), nvl(batch.getStructure()),
                 cmRef, toAmount(totalNet), toAmount(totalDisc), "",
                 lines);
     }
@@ -1097,12 +1108,13 @@ public class CentreMonetiqueLiaisonService {
             String statementRib,
             CentreMonetiqueBatch batch) {
 
-        String ibanLast5 = nvl(settlementTx.getDcFlag()).trim();
+        String ibanLast5 = normalizeRibDigits(nvl(settlementTx.getDcFlag()));
         BigDecimal netAmount = settlementTx.getCredit();
         BigDecimal submissionAmount = settlementTx.getMontant() != null ? settlementTx.getMontant() : null;
         BigDecimal discountAmount = settlementTx.getDebit();
 
-        if (!ibanLast5.isBlank() && !nvl(statementRib).endsWith(ibanLast5)) {
+        String normalizedStatementRib = normalizeRibDigits(statementRib);
+        if (ibanLast5 != null && normalizedStatementRib != null && !normalizedStatementRib.endsWith(ibanLast5)) {
             return null;
         }
 
@@ -1135,7 +1147,7 @@ public class CentreMonetiqueLiaisonService {
                 : (discountAmount != null ? netAmount.add(discountAmount) : null);
 
         return new CmExpansionDTO(
-                bankTx.getId(), batch.getId(), nvl(batch.getOriginalName()),
+                bankTx.getId(), batch.getId(), nvl(batch.getOriginalName()), nvl(batch.getStructure()),
                 cmRef, toAmount(netAmount), toAmount(discountAmount), "",
                 lines);
     }
@@ -1247,15 +1259,30 @@ public class CentreMonetiqueLiaisonService {
     }
 
     private List<BankTransaction> loadAmexBankCandidates(String rib) {
-        if (rib == null || rib.isBlank()) return List.of();
-        if (rib.length() <= 5) {
+        String normalizedRib = normalizeRibDigits(rib);
+        if (normalizedRib == null || normalizedRib.isBlank()) return List.of();
+        if (normalizedRib.length() <= 5) {
             List<BankTransaction> result = new ArrayList<>();
-            for (String fullRib : bankStatementRepository.findDistinctRibsEndingWith(rib)) {
+            for (String fullRib : bankStatementRepository.findDistinctRibsEndingWith(normalizedRib)) {
                 result.addAll(bankTransactionRepository.findCreditTransactionsByRib(fullRib));
             }
             return result;
         }
-        return bankTransactionRepository.findCreditTransactionsByRib(rib);
+        List<BankTransaction> direct = bankTransactionRepository.findCreditTransactionsByRib(normalizedRib);
+        if (!direct.isEmpty()) {
+            return direct;
+        }
+
+        String suffix = normalizedRib.substring(Math.max(0, normalizedRib.length() - 5));
+        if (suffix.isBlank() || suffix.equals(normalizedRib)) {
+            return direct;
+        }
+
+        List<BankTransaction> fallback = new ArrayList<>();
+        for (String fullRib : bankStatementRepository.findDistinctRibsEndingWith(suffix)) {
+            fallback.addAll(bankTransactionRepository.findCreditTransactionsByRib(fullRib));
+        }
+        return fallback;
     }
 
     private BankTransaction pickBestBankTxForAmount(List<BankTransaction> candidates,
@@ -1320,12 +1347,38 @@ public class CentreMonetiqueLiaisonService {
     }
 
     private boolean amexBatchRibMatchesStatement(String batchRib, String statementRib) {
-        String b = nvl(batchRib).trim();
-        String s = nvl(statementRib).trim();
-        if (b.isBlank() || s.isBlank()) return false;
+        return matchesAmexRib(batchRib, statementRib);
+    }
+
+    private String normalizeRibDigits(String rib) {
+        if (rib == null) return null;
+        String digits = rib.replaceAll("\\D", "");
+        return digits.isBlank() ? null : digits;
+    }
+
+    private boolean matchesAmexRib(String batchRib, String statementRib) {
+        String b = normalizeRibDigits(batchRib);
+        String s = normalizeRibDigits(statementRib);
+        if (b == null || b.isBlank() || s == null || s.isBlank()) return false;
         if (s.equals(b)) return true;
-        if (b.length() <= 5) return s.endsWith(b);
+
+        String bSuffix = lastDigits(b, 5);
+        String sSuffix = lastDigits(s, 5);
+        if (bSuffix != null && bSuffix.equals(sSuffix)) return true;
+
+        if (b.length() <= 5 && s.endsWith(b)) return true;
+        if (s.length() <= 5 && b.endsWith(s)) return true;
         return false;
+    }
+
+    private String lastDigits(String value, int length) {
+        if (value == null || value.isBlank() || length <= 0) {
+            return null;
+        }
+        if (value.length() <= length) {
+            return value;
+        }
+        return value.substring(value.length() - length);
     }
 
     private boolean shouldSkipVpsLiaison(CentreMonetiqueTransaction tx) {

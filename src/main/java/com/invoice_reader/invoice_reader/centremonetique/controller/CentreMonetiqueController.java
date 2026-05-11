@@ -6,6 +6,8 @@ import com.invoice_reader.invoice_reader.centremonetique.dto.CentreMonetiqueExtr
 import com.invoice_reader.invoice_reader.centremonetique.dto.CentreMonetiqueUploadResponseDTO;
 import com.invoice_reader.invoice_reader.centremonetique.service.CentreMonetiqueStructureType;
 import com.invoice_reader.invoice_reader.centremonetique.service.CentreMonetiqueWorkflowService;
+import com.invoice_reader.invoice_reader.liaison_rlv_b_ctr_mntq.dto.RapprochementResultDTO;
+import com.invoice_reader.invoice_reader.liaison_rlv_b_ctr_mntq.service.CentreMonetiqueLiaisonService;
 import com.invoice_reader.invoice_reader.entity.auth.Dossier;
 import com.invoice_reader.invoice_reader.entity.auth.DossierGeneralParams;
 import com.invoice_reader.invoice_reader.entity.auth.UserRole;
@@ -46,6 +48,7 @@ import java.util.Optional;
 public class CentreMonetiqueController {
 
     private final CentreMonetiqueWorkflowService workflowService;
+    private final CentreMonetiqueLiaisonService liaisonService;
     private final AuthService authService;
     private final DossierDao dossierDao;
     private final DossierGeneralParamsDao dossierGeneralParamsDao;
@@ -98,10 +101,9 @@ public class CentreMonetiqueController {
             if (sessionUser.isAdmin()) {
                 workflowService.clientValidate(detail.getId(), resolvedDossierId, sessionUser.username());
             }
-            return ResponseEntity.status(HttpStatus.CREATED).body(new CentreMonetiqueUploadResponseDTO(
+            return ResponseEntity.status(HttpStatus.CREATED).body(buildUploadResponse(
                     "Extraction terminee",
-                    detail,
-                    detail.getRows()));
+                    detail));
         } catch (Exception e) {
             log.error("Erreur extraction centre monetique: {}", e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of(
@@ -231,10 +233,9 @@ public class CentreMonetiqueController {
             if (detail.isEmpty()) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Introuvable"));
             }
-            return ResponseEntity.ok(new CentreMonetiqueUploadResponseDTO(
+            return ResponseEntity.ok(buildUploadResponse(
                     "Retraitement termine",
-                    detail.get(),
-                    detail.get().getRows()));
+                    detail.get()));
         } catch (Exception e) {
             log.error("Erreur reprocess centre monetique {}: {}", id, e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of(
@@ -265,10 +266,9 @@ public class CentreMonetiqueController {
             if (detail.isEmpty()) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Introuvable"));
             }
-            return ResponseEntity.ok(new CentreMonetiqueUploadResponseDTO(
+            return ResponseEntity.ok(buildUploadResponse(
                     "Lignes enregistrees",
-                    detail.get(),
-                    detail.get().getRows()));
+                    detail.get()));
         } catch (Exception e) {
             log.error("Erreur sauvegarde des lignes centre monétique {}: {}", id, e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of(
@@ -398,6 +398,34 @@ public class CentreMonetiqueController {
             return ResponseEntity.internalServerError().body(Map.of(
                     "error", "Erreur lors de la validation"));
         }
+    }
+
+    private CentreMonetiqueUploadResponseDTO buildUploadResponse(String message,
+                                                                 CentreMonetiqueBatchDetailDTO detail) {
+        RapprochementResultDTO rapprochement = null;
+        String finalMessage = message;
+        if (detail != null && detail.getId() != null) {
+            try {
+                rapprochement = liaisonService.rapprochement(detail.getId()).orElse(null);
+                if (rapprochement != null) {
+                    String rib = rapprochement.getBatchRib() != null && !rapprochement.getBatchRib().isBlank()
+                            ? rapprochement.getBatchRib()
+                            : "RIB inconnu";
+                    finalMessage = message + " - RIB " + rib + " - rapprochement "
+                            + rapprochement.getMatchedCount() + "/" + rapprochement.getTotalCmTransactions();
+                } else {
+                    finalMessage = message + " - aucun rapprochement trouvé";
+                }
+            } catch (Exception e) {
+                log.warn("Calcul du rapprochement CM impossible pour le batch {}: {}",
+                        detail.getId(), e.getMessage());
+            }
+        }
+        return new CentreMonetiqueUploadResponseDTO(
+                finalMessage,
+                detail,
+                detail != null && detail.getRows() != null ? detail.getRows() : List.of(),
+                rapprochement);
     }
 
     // ==================== AUTORISATION PAR DOSSIER ====================

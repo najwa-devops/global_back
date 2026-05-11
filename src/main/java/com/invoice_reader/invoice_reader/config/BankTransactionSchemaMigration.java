@@ -15,12 +15,12 @@ import java.util.Locale;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class GeneralParamsSchemaMigration {
+public class BankTransactionSchemaMigration {
 
     private final DataSource dataSource;
 
     @PostConstruct
-    public void addValidatedDeletionFlags() {
+    public void addCmAppliedUserDisabledFlag() {
         try (Connection connection = dataSource.getConnection()) {
             String product = connection.getMetaData().getDatabaseProductName();
             if (product == null) {
@@ -32,20 +32,17 @@ public class GeneralParamsSchemaMigration {
             }
 
             String schema = connection.getCatalog();
-            if (!tableExists(connection, schema, "dossier_general_params")) {
+            if (!tableExists(connection, schema, "bank_transaction")) {
                 return;
             }
 
-            addColumnIfMissing(connection, schema, "dossier_general_params",
-                    "allow_validated_document_deletion",
-                    "ALTER TABLE dossier_general_params ADD COLUMN allow_validated_document_deletion BOOLEAN NOT NULL DEFAULT FALSE");
-            addColumnIfMissing(connection, schema, "dossier_general_params",
-                    "allow_accounted_document_deletion",
-                    "ALTER TABLE dossier_general_params ADD COLUMN allow_accounted_document_deletion BOOLEAN NOT NULL DEFAULT FALSE");
+            addColumnIfMissing(connection, schema, "bank_transaction",
+                    "cm_applied_user_disabled",
+                    "ALTER TABLE bank_transaction ADD COLUMN cm_applied_user_disabled BOOLEAN NOT NULL DEFAULT FALSE");
 
-            log.info("GeneralParamsSchemaMigration: colonnes allow_validated_document_deletion et allow_accounted_document_deletion vérifiées.");
+            log.info("BankTransactionSchemaMigration: colonne cm_applied_user_disabled vérifiée.");
         } catch (Exception e) {
-            log.warn("GeneralParamsSchemaMigration: migration non appliquée: {}", e.getMessage());
+            log.warn("BankTransactionSchemaMigration: migration non appliquée: {}", e.getMessage());
         }
     }
 

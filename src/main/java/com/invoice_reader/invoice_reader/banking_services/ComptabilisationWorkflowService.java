@@ -116,7 +116,7 @@ public class ComptabilisationWorkflowService {
                 continue;
             }
 
-            if (cmExp != null && Boolean.TRUE.equals(tx.getCmApplied())) {
+            if (cmExp != null && isCmAppliedEffective(tx, cmExp)) {
                 BigDecimal commissionHt = parseAmount(cmExp.commissionHt());
                 BigDecimal tvaSurCommissions = parseAmount(cmExp.tvaSurCommissions());
                 BigDecimal soldeNet = parseAmount(cmExp.cmMontant());
@@ -345,6 +345,19 @@ public class ComptabilisationWorkflowService {
         } catch (NumberFormatException ignored) {
             return BigDecimal.ZERO;
         }
+    }
+
+    private boolean isCmAppliedEffective(BankTransaction tx, CmExpansionDTO cmExp) {
+        if (tx == null || cmExp == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(tx.getCmAppliedUserDisabled())) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(tx.getCmApplied())) {
+            return true;
+        }
+        return true;
     }
 
     private long resolveTransactionNumero(BankTransaction tx, long fallbackNumero) {

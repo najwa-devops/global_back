@@ -6,6 +6,7 @@ import com.invoice_reader.invoice_reader.banking_entity.BankTransaction;
 import com.invoice_reader.invoice_reader.banking_repository.BankStatementRepository;
 import com.invoice_reader.invoice_reader.banking_repository.BankTransactionRepository;
 import com.invoice_reader.invoice_reader.banking_services.BankTransactionAccountLearningService;
+import com.invoice_reader.invoice_reader.liaison_rlv_b_ctr_mntq.service.CentreMonetiqueLiaisonService;
 import com.invoice_reader.invoice_reader.entity.auth.UserRole;
 import com.invoice_reader.invoice_reader.security.RequireRole;
 import jakarta.validation.Valid;
@@ -47,6 +48,7 @@ public class BankTransactionController {
     private final BankTransactionRepository repository;
     private final BankStatementRepository statementRepository;
     private final BankTransactionAccountLearningService accountLearningService;
+    private final CentreMonetiqueLiaisonService centreMonetiqueLiaisonService;
 
     // ==================== CONSULTATION ====================
 
@@ -138,7 +140,9 @@ public class BankTransactionController {
                         transaction.setIsLinked(Boolean.TRUE.equals(updates.get("isLinked")));
                     }
                     if (updates.containsKey("cmApplied")) {
-                        transaction.setCmApplied(Boolean.TRUE.equals(updates.get("cmApplied")));
+                        boolean applied = Boolean.TRUE.equals(updates.get("cmApplied"));
+                        transaction.setCmApplied(applied);
+                        transaction.setCmAppliedUserDisabled(!applied);
                     }
 
                     if (updates.containsKey("categorie")) {
@@ -337,7 +341,9 @@ public class BankTransactionController {
                     transaction.setIsLinked((Boolean) updates.get("isLinked"));
                 }
                 if (updates.containsKey("cmApplied")) {
-                    transaction.setCmApplied((Boolean) updates.get("cmApplied"));
+                    boolean applied = Boolean.TRUE.equals(updates.get("cmApplied"));
+                    transaction.setCmApplied(applied);
+                    transaction.setCmAppliedUserDisabled(!applied);
                 }
 
                 if (updates.containsKey("categorie")) {
@@ -483,6 +489,7 @@ public class BankTransactionController {
         response.put("compte", displayedCompte);
         response.put("compteLibelle", accountLearningService.findAccountLibelle(displayedCompte).orElse(""));
         response.put("isLinked", displayIsLinked(transaction.getIsLinked(), displayedCompte));
+        response.put("cmApplied", resolveEffectiveCmApplied(transaction));
         response.put("fraisRuleApplied", Boolean.TRUE.equals(transaction.getFraisRuleApplied()));
         response.put("fraisSplitRole", transaction.getFraisSplitRole());
         response.put("fraisOriginalAmount", transaction.getFraisOriginalAmount());
@@ -556,6 +563,24 @@ public class BankTransactionController {
             return true;
         }
         return displayedCompte != null && !displayedCompte.isBlank();
+    }
+
+    private boolean resolveEffectiveCmApplied(BankTransaction transaction) {
+        if (transaction == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(transaction.getCmAppliedUserDisabled())) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(transaction.getCmApplied())) {
+            return true;
+        }
+        if (transaction.getStatement() == null || transaction.getStatement().getId() == null) {
+            return false;
+        }
+        return centreMonetiqueLiaisonService.getCmExpansionsForStatement(transaction.getStatement().getId())
+                .stream()
+                .anyMatch(exp -> exp != null && transaction.getId() != null && transaction.getId().equals(exp.bankTransactionId()));
     }
 
     private void refreshStatementAggregates(Long statementId) {

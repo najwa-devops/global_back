@@ -6,6 +6,7 @@ public record CmExpansionDTO(
         Long bankTransactionId,
         Long cmBatchId,
         String cmBatchOriginalName,
+        String cmBatchStructure,
         String cmReference,
         String cmMontant,
         String commissionHt,

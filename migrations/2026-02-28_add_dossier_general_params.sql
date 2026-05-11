@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS dossier_general_params (
     subject_to_ras BOOLEAN NULL DEFAULT FALSE,
     individual_person BOOLEAN NULL DEFAULT FALSE,
     has_fiscal_regularity_certificate BOOLEAN NULL DEFAULT FALSE,
+    allow_validated_document_deletion BOOLEAN NULL DEFAULT FALSE,
+    allow_accounted_document_deletion BOOLEAN NULL DEFAULT FALSE,
     created_at DATETIME(6) NULL,
     updated_at DATETIME(6) NULL,
     PRIMARY KEY (id),

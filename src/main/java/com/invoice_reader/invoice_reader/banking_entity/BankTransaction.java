@@ -74,6 +74,9 @@ public class BankTransaction {
     @Column(name = "cm_applied", nullable = false)
     private Boolean cmApplied = false;
 
+    @Column(name = "cm_applied_user_disabled", nullable = false)
+    private Boolean cmAppliedUserDisabled = false;
+
     @Column(name = "frais_rule_applied", nullable = false)
     private Boolean fraisRuleApplied = false;
 

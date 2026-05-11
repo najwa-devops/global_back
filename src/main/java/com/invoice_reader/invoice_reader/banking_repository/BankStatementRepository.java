@@ -28,6 +28,8 @@ public interface BankStatementRepository extends JpaRepository<BankStatement, Lo
 
     long countByDossierIdAndClientValidatedTrue(Long dossierId);
 
+    long countByClientValidatedTrue();
+
     long countByDossierIdAndRib(Long dossierId, String rib);
 
     @Query("SELECT COUNT(s) FROM BankStatement s WHERE s.rib = :rib AND (s.dossierId = :dossierId OR s.dossierId IS NULL)")

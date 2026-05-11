@@ -12,6 +12,8 @@ import com.invoice_reader.invoice_reader.entity.auth.DossierGeneralParams;
 import com.invoice_reader.invoice_reader.entity.auth.UserRole;
 import com.invoice_reader.invoice_reader.repository.DossierDao;
 import com.invoice_reader.invoice_reader.repository.DossierGeneralParamsDao;
+import com.invoice_reader.invoice_reader.liaison_rlv_b_ctr_mntq.dto.CmExpansionDTO;
+import com.invoice_reader.invoice_reader.liaison_rlv_b_ctr_mntq.service.CentreMonetiqueLiaisonService;
 import com.invoice_reader.invoice_reader.security.RequireRole;
 import com.invoice_reader.invoice_reader.servises.auth.AuthService;
 import com.invoice_reader.invoice_reader.servises.auth.SessionKeys;
@@ -27,8 +29,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -67,6 +67,7 @@ public class BankStatementController {
     private final AuthService authService;
     private final DossierDao dossierDao;
     private final DossierGeneralParamsDao dossierGeneralParamsDao;
+    private final CentreMonetiqueLiaisonService centreMonetiqueLiaisonService;
     private static final Pattern DUPLICATE_OF_PATTERN = Pattern.compile("DUPLIQUE_OF:(\\d+)");
     private static final Pattern OCR_DATE_PATTERN = Pattern.compile(
             "(?<!\\d)(\\d{1,2}(?:\\s*[\\/\\-.]\\s*|\\s+)\\d{1,2}(?:(?:\\s*[\\/\\-.]\\s*|\\s+)\\d{2,4})?)(?!\\d)");
@@ -150,6 +151,10 @@ public class BankStatementController {
             statement.setFileData(null);
             statement.setStatus(BankStatus.PENDING);
             statement.setDossierId(resolvedDossierId);
+            statement.setApplyTtcRule(true);
+            statement.setApplyFraisRule(true);
+            statement.setApplyAgiosRule(true);
+            statement.setApplyPackageRule(true);
 
             // Les dates de période sont déterminées par OCR/extraction metadata.
             statement.setMonth(null);
@@ -187,10 +192,13 @@ public class BankStatementController {
         log.info("🔄 Retraitement relevé: {} (Final cleaned allowedBanks: {})", id, cleanedAllowedBanks);
 
         try {
-            processingService.reprocessStatementAsync(id, cleanedAllowedBanks);
-            return ResponseEntity.accepted().body(Map.of(
-                    "message", "Reprise démarrée",
-                    "allowedBanks", cleanedAllowedBanks));
+            BankStatement processed = processingService.reprocessStatement(id, cleanedAllowedBanks);
+            syncCmAppliedFromExpansions(processed.getId());
+            return ResponseEntity.ok(Map.of(
+                    "message", "Reprise terminée",
+                    "allowedBanks", cleanedAllowedBanks,
+                    "statementId", processed.getId(),
+                    "status", processed.getStatus() != null ? processed.getStatus().name() : "UNKNOWN"));
         } catch (Exception e) {
             log.error("❌ Erreur retraitement: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -353,9 +361,9 @@ public class BankStatementController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
                         "error", "accounted_document_deletion_disabled"));
             }
-        } else if (stmtStatus == BankStatus.VALIDATED
+        } else if ((Boolean.TRUE.equals(statement.getClientValidated()) || stmtStatus == BankStatus.VALIDATED)
                 && !isValidatedDocumentDeletionAllowed(resolvedDossierId)) {
-            // VALIDATED (not comptabilisé) → flag allowValidatedDocumentDeletion
+            // VALIDATED or client-validated (not comptabilisé) → flag allowValidatedDocumentDeletion
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
                     "error", "validated_document_deletion_disabled"));
         }
@@ -404,10 +412,14 @@ public class BankStatementController {
     @RequireRole({UserRole.ADMIN, UserRole.COMPTABLE})
     public ResponseEntity<?> deleteAll() {
         long accountedCount = repository.countByStatus(BankStatus.COMPTABILISE);
-        if (accountedCount > 0) {
+        long validatedCount = repository.countByStatus(BankStatus.VALIDATED);
+        long clientValidatedCount = repository.countByClientValidatedTrue();
+        if (accountedCount > 0 || validatedCount > 0 || clientValidatedCount > 0) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
-                    "error", "Suppression impossible: relevés comptabilisés présents",
-                    "accountedCount", accountedCount));
+                    "error", "Suppression impossible: relevés validés ou comptabilisés présents",
+                    "accountedCount", accountedCount,
+                    "validatedCount", validatedCount,
+                    "clientValidatedCount", clientValidatedCount));
         }
         log.info("🗑️ Suppression de TOUS les relevés bancaires");
         transactionRepository.deleteAllInBatch();
@@ -687,6 +699,7 @@ public class BankStatementController {
                                 "statement", toResponse(statement)));
                     }
                     statement.setApplyTtcRule(enabled);
+                    BankStatement processed = statement;
                     if (Boolean.TRUE.equals(request.getReprocess())) {
                         statement.setStatus(BankStatus.PROCESSING);
                         statement.setValidationErrors(null);
@@ -695,7 +708,8 @@ public class BankStatementController {
 
                     if (Boolean.TRUE.equals(request.getReprocess())) {
                         try {
-                            runAfterCommit(() -> processingService.reprocessStatementAsync(id));
+                            processed = processingService.reprocessStatement(id);
+                            syncCmAppliedFromExpansions(processed.getId());
                         } catch (IllegalStateException e) {
                             return ResponseEntity.badRequest().body(Map.of(
                                     "error", e.getMessage(),
@@ -715,7 +729,7 @@ public class BankStatementController {
                             enabled
                                     ? "Règle TTC activée" + (Boolean.TRUE.equals(request.getReprocess()) ? " et retraitement lancé" : "")
                                     : "Règle TTC désactivée" + (Boolean.TRUE.equals(request.getReprocess()) ? " et retraitement lancé" : ""),
-                            saved));
+                            processed));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -730,6 +744,7 @@ public class BankStatementController {
                                 "statement", toResponse(statement)));
                     }
                     statement.setApplyFraisRule(enabled);
+                    BankStatement processed = statement;
                     if (Boolean.TRUE.equals(request.getReprocess())) {
                         statement.setStatus(BankStatus.PROCESSING);
                         statement.setValidationErrors(null);
@@ -738,7 +753,8 @@ public class BankStatementController {
 
                     if (Boolean.TRUE.equals(request.getReprocess())) {
                         try {
-                            runAfterCommit(() -> processingService.reprocessStatementAsync(id));
+                            processed = processingService.reprocessStatement(id);
+                            syncCmAppliedFromExpansions(processed.getId());
                         } catch (IllegalStateException e) {
                             return ResponseEntity.badRequest().body(Map.of(
                                     "error", e.getMessage(),
@@ -758,7 +774,7 @@ public class BankStatementController {
                             enabled
                                     ? "Règle frais activée" + (Boolean.TRUE.equals(request.getReprocess()) ? " et retraitement lancé" : "")
                                     : "Règle frais désactivée" + (Boolean.TRUE.equals(request.getReprocess()) ? " et retraitement lancé" : ""),
-                            saved));
+                            processed));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -773,6 +789,7 @@ public class BankStatementController {
                                 "statement", toResponse(statement)));
                     }
                     statement.setApplyAgiosRule(enabled);
+                    BankStatement processed = statement;
                     if (Boolean.TRUE.equals(request.getReprocess())) {
                         statement.setStatus(BankStatus.PROCESSING);
                         statement.setValidationErrors(null);
@@ -781,7 +798,8 @@ public class BankStatementController {
 
                     if (Boolean.TRUE.equals(request.getReprocess())) {
                         try {
-                            runAfterCommit(() -> processingService.reprocessStatementAsync(id));
+                            processed = processingService.reprocessStatement(id);
+                            syncCmAppliedFromExpansions(processed.getId());
                         } catch (IllegalStateException e) {
                             return ResponseEntity.badRequest().body(Map.of(
                                     "error", e.getMessage(),
@@ -801,7 +819,7 @@ public class BankStatementController {
                             enabled
                                     ? "Règle agios activée" + (Boolean.TRUE.equals(request.getReprocess()) ? " et retraitement lancé" : "")
                                     : "Règle agios désactivée" + (Boolean.TRUE.equals(request.getReprocess()) ? " et retraitement lancé" : ""),
-                            saved));
+                            processed));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -816,6 +834,7 @@ public class BankStatementController {
                                 "statement", toResponse(statement)));
                     }
                     statement.setApplyPackageRule(enabled);
+                    BankStatement processed = statement;
                     if (Boolean.TRUE.equals(request.getReprocess())) {
                         statement.setStatus(BankStatus.PROCESSING);
                         statement.setValidationErrors(null);
@@ -824,7 +843,8 @@ public class BankStatementController {
 
                     if (Boolean.TRUE.equals(request.getReprocess())) {
                         try {
-                            runAfterCommit(() -> processingService.reprocessStatementAsync(id));
+                            processed = processingService.reprocessStatement(id);
+                            syncCmAppliedFromExpansions(processed.getId());
                         } catch (IllegalStateException e) {
                             return ResponseEntity.badRequest().body(Map.of(
                                     "error", e.getMessage(),
@@ -844,7 +864,7 @@ public class BankStatementController {
                             enabled
                                     ? "Règle package activée" + (Boolean.TRUE.equals(request.getReprocess()) ? " et retraitement lancé" : "")
                                     : "Règle package désactivée" + (Boolean.TRUE.equals(request.getReprocess()) ? " et retraitement lancé" : ""),
-                            saved));
+                            processed));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -854,19 +874,6 @@ public class BankStatementController {
         response.put("message", message);
         response.put("statement", toResponse(statement));
         return response;
-    }
-
-    private void runAfterCommit(Runnable action) {
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    action.run();
-                }
-            });
-            return;
-        }
-        action.run();
     }
 
     // ==================== STATISTIQUES ====================
@@ -1012,6 +1019,7 @@ public class BankStatementController {
         int agiosRuleAppliedCount = countAppliedRulesByPrefix(source, "AGIOS_");
         int packageRuleAppliedCount = countAppliedRulesByPrefix(source, "PACKAGE_");
         int ttcRuleAppliedCount = countAppliedRulesByPrefix(source, "COMMISSION_");
+        Set<Long> cmLinkedTxIds = resolveCmLinkedTransactionIds(statement.getId());
 
         Map<String, Object> response = buildListResponse(statement);
         response.put("accountHolder", source.getAccountHolder());
@@ -1059,7 +1067,7 @@ public class BankStatementController {
                     txMap.put("compte", displayedCompte);
                     txMap.put("compteLibelle", accountLabelsByCode.getOrDefault(displayedCompte, ""));
                     txMap.put("isLinked", displayIsLinked(t.getIsLinked(), displayedCompte));
-                    txMap.put("cmApplied", Boolean.TRUE.equals(t.getCmApplied()));
+                    txMap.put("cmApplied", resolveEffectiveCmApplied(t, cmLinkedTxIds));
                     txMap.put("fraisRuleApplied", Boolean.TRUE.equals(t.getFraisRuleApplied()));
                     txMap.put("fraisSplitRole", t.getFraisSplitRole());
                     txMap.put("fraisSplitGroupId", t.getFraisSplitGroupId());
@@ -1098,6 +1106,28 @@ public class BankStatementController {
         }
 
         return response;
+    }
+
+    private Set<Long> resolveCmLinkedTransactionIds(Long statementId) {
+        if (statementId == null) {
+            return Set.of();
+        }
+        try {
+            List<CmExpansionDTO> expansions = centreMonetiqueLiaisonService.getCmExpansionsForStatement(statementId);
+            if (expansions == null || expansions.isEmpty()) {
+                return Set.of();
+            }
+            Set<Long> ids = new LinkedHashSet<>();
+            for (CmExpansionDTO expansion : expansions) {
+                if (expansion != null && expansion.bankTransactionId() != null) {
+                    ids.add(expansion.bankTransactionId());
+                }
+            }
+            return ids;
+        } catch (Exception e) {
+            log.warn("Lecture des liaisons CM ignorée pour relevé {}: {}", statementId, e.getMessage());
+            return Set.of();
+        }
     }
 
     private Map<String, Object> buildListResponse(BankStatement statement) {
@@ -1148,7 +1178,7 @@ public class BankStatementController {
         response.put("isLinked", false);
         response.put("cmApplied", false);
         response.put("canReprocess", statement.isModifiable() && statement.getStatus() != BankStatus.PROCESSING);
-        response.put("canDelete", statement.isModifiable());
+        response.put("canDelete", canDeleteStatement(statement));
         response.put("createdAt", statement.getCreatedAt());
         response.put("updatedAt", statement.getUpdatedAt());
         response.put("accountedAt", statement.getAccountedAt());
@@ -1280,6 +1310,34 @@ public class BankStatementController {
         return dossierGeneralParamsDao.findByDossierId(dossierId)
                 .map(params -> Boolean.TRUE.equals(params.getAllowAccountedDocumentDeletion()))
                 .orElse(false);
+    }
+
+    private boolean canDeleteStatement(BankStatement statement) {
+        if (statement == null) {
+            return false;
+        }
+        BankStatus status = statement.getStatus();
+        Long dossierId = statement.getDossierId();
+        if (status == BankStatus.COMPTABILISE) {
+            return isAccountedDocumentDeletionAllowed(dossierId);
+        }
+        if (Boolean.TRUE.equals(statement.getClientValidated()) || status == BankStatus.VALIDATED) {
+            return isValidatedDocumentDeletionAllowed(dossierId);
+        }
+        return statement.isModifiable();
+    }
+
+    private boolean resolveEffectiveCmApplied(BankTransaction transaction, Set<Long> linkedTxIds) {
+        if (transaction == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(transaction.getCmAppliedUserDisabled())) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(transaction.getCmApplied())) {
+            return true;
+        }
+        return linkedTxIds != null && transaction.getId() != null && linkedTxIds.contains(transaction.getId());
     }
 
     private boolean canAccessStatementInDossier(SessionUser sessionUser, BankStatement statement, Long dossierId) {
@@ -1444,6 +1502,49 @@ public class BankStatementController {
             return true;
         }
         return displayedCompte != null && !displayedCompte.isBlank();
+    }
+
+    private void syncCmAppliedFromExpansions(Long statementId) {
+        if (statementId == null) {
+            return;
+        }
+        try {
+            List<CmExpansionDTO> expansions = centreMonetiqueLiaisonService.getCmExpansionsForStatement(statementId);
+            if (expansions == null || expansions.isEmpty()) {
+                return;
+            }
+
+            Set<Long> linkedTxIds = new HashSet<>();
+            for (CmExpansionDTO expansion : expansions) {
+                if (expansion != null && expansion.bankTransactionId() != null) {
+                    linkedTxIds.add(expansion.bankTransactionId());
+                }
+            }
+            if (linkedTxIds.isEmpty()) {
+                return;
+            }
+
+            List<BankTransaction> linkedTransactions = transactionRepository.findAllById(linkedTxIds);
+            boolean changed = false;
+            for (BankTransaction tx : linkedTransactions) {
+                if (Boolean.TRUE.equals(tx.getCmAppliedUserDisabled())) {
+                    if (!Boolean.FALSE.equals(tx.getCmApplied())) {
+                        tx.setCmApplied(false);
+                        changed = true;
+                    }
+                    continue;
+                }
+                if (!Boolean.TRUE.equals(tx.getCmApplied())) {
+                    tx.setCmApplied(true);
+                    changed = true;
+                }
+            }
+            if (changed) {
+                transactionRepository.saveAll(linkedTransactions);
+            }
+        } catch (Exception e) {
+            log.warn("Synchronisation CM ignorée pour relevé {}: {}", statementId, e.getMessage());
+        }
     }
 
     private int countAppliedRulesByPrefix(BankStatement statement, String prefix) {

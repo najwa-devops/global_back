@@ -84,7 +84,7 @@ public class CentreMonetiqueWorkflowService {
         batch.setStructure((structureType != null ? structureType : CentreMonetiqueStructureType.AUTO).name());
         batch.setDossierId(resolvedDossierId);
         if (rib != null && !rib.isBlank()) {
-            batch.setRib(rib.trim());
+            batch.setRib(normalizeRibDigits(rib));
         }
         batch = batchRepository.save(batch);
 
@@ -101,10 +101,13 @@ public class CentreMonetiqueWorkflowService {
                     : CentreMonetiqueStructureType.AUTO.name());
             if (CentreMonetiqueStructureType.AMEX.name().equals(batch.getStructure())) {
                 if (batch.getRib() == null || batch.getRib().isBlank()) {
-                    resolveAmexRibFromLast5(payload.rawOcrText()).ifPresent(batch::setRib);
+                    Optional<String> amexRib = resolveAmexRibFromLast5(payload.rawOcrText());
+                    if (amexRib.isPresent()) {
+                        batch.setRib(normalizeRibDigits(amexRib.get()));
+                    }
                 }
             } else if ((batch.getRib() == null || batch.getRib().isBlank()) && payload.extractedRib() != null && !payload.extractedRib().isBlank()) {
-                batch.setRib(payload.extractedRib());
+                batch.setRib(normalizeRibDigits(payload.extractedRib()));
             }
             persistRows(batch, rows, payload.summaryTotals());
             batch.setStatus("PROCESSED");
@@ -144,7 +147,7 @@ public class CentreMonetiqueWorkflowService {
             return Optional.empty();
         }
         CentreMonetiqueBatch batch = optional.get();
-        batch.setRib(rib != null && !rib.isBlank() ? rib.trim() : null);
+        batch.setRib(normalizeRibDigits(rib));
         CentreMonetiqueBatch saved = batchRepository.save(batch);
         List<CentreMonetiqueExtractionRow> rows = toRows(transactionRepository.findByBatchIdOrderByRowIndexAsc(saved.getId()));
         return Optional.of(toDetailDTO(saved, rows, false));
@@ -186,10 +189,10 @@ public class CentreMonetiqueWorkflowService {
         batch.setStructure(resolvedStructure);
         if (CentreMonetiqueStructureType.AMEX.name().equals(resolvedStructure)) {
             if (batch.getRib() == null || batch.getRib().isBlank()) {
-                resolveAmexRibFromLast5(payload.rawOcrText()).ifPresent(batch::setRib);
+                resolveAmexRibFromLast5(payload.rawOcrText()).ifPresent(value -> batch.setRib(normalizeRibDigits(value)));
             }
         } else if ((batch.getRib() == null || batch.getRib().isBlank()) && payload.extractedRib() != null && !payload.extractedRib().isBlank()) {
-            batch.setRib(payload.extractedRib());
+            batch.setRib(normalizeRibDigits(payload.extractedRib()));
         }
         persistRows(batch, rows, payload.summaryTotals());
 
@@ -370,7 +373,7 @@ public class CentreMonetiqueWorkflowService {
 
     private CentreMonetiqueBatchSummaryDTO toSummaryDTO(CentreMonetiqueBatchSummaryProjection batch) {
         String rib = nvl(batch.getRib());
-        boolean isLinked = !rib.isBlank() && bankStatementRepository.countByRib(rib) > 0;
+        boolean isLinked = hasLinkedBankStatement(rib, null);
         return new CentreMonetiqueBatchSummaryDTO(
                 batch.getId(),
                 batch.getFilename(),
@@ -627,14 +630,52 @@ public class CentreMonetiqueWorkflowService {
         return Optional.of(suffix);
     }
 
+    private String normalizeRibDigits(String rib) {
+        if (rib == null) {
+            return null;
+        }
+        String digits = rib.replaceAll("\\D", "");
+        return digits.isBlank() ? null : digits;
+    }
+
     private boolean hasLinkedBankStatement(String rib, Long dossierId) {
-        if (rib == null || rib.isBlank()) {
+        String normalizedRib = normalizeRibDigits(rib);
+        if (normalizedRib == null || normalizedRib.isBlank()) {
             return false;
         }
+        if (hasBankStatementForRib(normalizedRib, dossierId)) {
+            return true;
+        }
+
+        // AMEX et certains batchs historiques peuvent n'avoir que les 5 derniers chiffres.
+        // Si on a un suffixe court, on cherche les relevés bancaires qui se terminent pareil.
+        if (normalizedRib.length() <= 5) {
+            return hasBankStatementForRibSuffix(normalizedRib, dossierId);
+        }
+        return false;
+    }
+
+    private boolean hasBankStatementForRib(String normalizedRib, Long dossierId) {
         if (dossierId == null) {
-            return bankStatementRepository.countByRib(rib) > 0;
+            return bankStatementRepository.countByRib(normalizedRib) > 0;
         }
         // Include legacy statements with null dossier_id (uploaded before multi-dossier support)
-        return bankStatementRepository.countByRibInDossierOrLegacy(rib, dossierId) > 0;
+        return bankStatementRepository.countByRibInDossierOrLegacy(normalizedRib, dossierId) > 0;
+    }
+
+    private boolean hasBankStatementForRibSuffix(String suffix, Long dossierId) {
+        if (suffix == null || suffix.isBlank()) {
+            return false;
+        }
+        for (String candidateRib : bankStatementRepository.findDistinctRibsEndingWith(suffix)) {
+            String normalizedCandidate = normalizeRibDigits(candidateRib);
+            if (normalizedCandidate == null || normalizedCandidate.isBlank()) {
+                continue;
+            }
+            if (hasBankStatementForRib(normalizedCandidate, dossierId)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

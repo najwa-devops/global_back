@@ -6,7 +6,6 @@ import com.invoice_reader.invoice_reader.banking_entity.JournalEntry;
 import com.invoice_reader.invoice_reader.banking_repository.AccountingEntryRepository;
 import com.invoice_reader.invoice_reader.banking_repository.JournalBatchRepository;
 import com.invoice_reader.invoice_reader.banking_repository.JournalEntryRepository;
-import com.invoice_reader.invoice_reader.banking_services.ComptabilisationWorkflowService;
 import com.invoice_reader.invoice_reader.banking_entity.BankStatement;
 import com.invoice_reader.invoice_reader.banking_repository.BankStatementRepository;
 import com.invoice_reader.invoice_reader.servises.auth.SessionKeys;
@@ -51,7 +50,6 @@ public class JournalController {
 
     private final BankStatementRepository bankStatementRepository;
     private final AccountingEntryRepository accountingEntryRepository;
-    private final ComptabilisationWorkflowService workflowService;
     private final JournalBatchRepository journalBatchRepository;
     private final JournalEntryRepository journalEntryRepository;
 
@@ -64,7 +62,6 @@ public class JournalController {
                 ? bankStatementRepository.findByDossierIdOrderByCreatedAtDesc(effectiveDossierId)
                         .stream().filter(s -> s.getYear() != null && s.getMonth() != null).toList()
                 : bankStatementRepository.findAllWithPeriodOrderByYearMonthDesc();
-        seedJournalBatches(statements);
         // Compute distinct periods from filtered statements (preserves dossier scope)
         Map<String, JournalPeriod> seen = new LinkedHashMap<>();
         for (BankStatement s : statements) {
@@ -109,7 +106,6 @@ public class JournalController {
                     : bankStatementRepository.findAllWithPeriodOrderByYearMonthDesc();
         }
 
-        seedJournalBatches(statements);
         List<JournalItem> items = new ArrayList<>(statements.size());
         for (BankStatement statement : statements) {
             if (statement.getYear() == null || statement.getMonth() == null) {
@@ -312,25 +308,33 @@ public class JournalController {
     public ResponseEntity<?> exportJournal(
             @PathVariable("statementId") Long statementId,
             @RequestHeader(name = "X-User-Id", required = false) String userId) {
-        JournalExportPayload payload = preparePayload(statementId, userId);
-        String csv = buildCsv(payload.rows());
-        String filename = payload.exportFilename() + ".csv";
+        try {
+            JournalExportPayload payload = preparePayload(statementId, userId);
+            String csv = buildCsv(payload.rows());
+            String filename = payload.exportFilename() + ".csv";
 
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("text/csv; charset=utf-8"))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-                .body(csv.getBytes(StandardCharsets.UTF_8));
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType("text/csv; charset=utf-8"))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                    .body(csv.getBytes(StandardCharsets.UTF_8));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping("/{statementId}/print")
     public ResponseEntity<?> printJournal(
             @PathVariable("statementId") Long statementId,
             @RequestHeader(name = "X-User-Id", required = false) String userId) {
-        JournalExportPayload payload = preparePayload(statementId, userId);
-        String html = buildPrintHtml(payload);
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("text/html; charset=utf-8"))
-                .body(html);
+        try {
+            JournalExportPayload payload = preparePayload(statementId, userId);
+            String html = buildPrintHtml(payload);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType("text/html; charset=utf-8"))
+                    .body(html);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @GetMapping("/{statementId}/entries")
@@ -387,16 +391,10 @@ public class JournalController {
                     rows.add(JournalRow.fromJournalEntry(entry));
                 }
             } else {
-                // journal_entry is empty: fallback to accounting_entries (no lazy-load risk)
-                BankStatement statement = bankStatementRepository.findById(statementId)
-                        .orElseThrow(() -> new IllegalArgumentException("Relevé introuvable."));
                 List<AccountingEntry> accountingEntries =
                         accountingEntryRepository.findBySourceStatementIdOrderByNumeroAscIdAsc(statementId);
                 if (accountingEntries.isEmpty()) {
-                    // Statement not comptabilisé yet: simulate + confirm, then re-fetch entries
-                    ComptabilisationWorkflowService.SimulationResult sim = workflowService.simulate(statementId);
-                    workflowService.confirm(sim.simulationId(), userId);
-                    accountingEntries = accountingEntryRepository.findBySourceStatementIdOrderByNumeroAscIdAsc(statementId);
+                    throw new IllegalStateException("Aucune ecriture comptable disponible pour ce releve. Lancez d'abord la simulation puis la confirmation.");
                 }
                 rows = new ArrayList<>(accountingEntries.size());
                 for (AccountingEntry e : accountingEntries) {
@@ -413,11 +411,18 @@ public class JournalController {
             throw new IllegalArgumentException("Période du relevé indisponible.");
         }
 
+        List<AccountingEntry> accountingEntries = accountingEntryRepository.findBySourceStatementIdOrderByNumeroAscIdAsc(statementId);
+        if (accountingEntries.isEmpty()) {
+            throw new IllegalStateException("Aucune ecriture comptable disponible pour ce releve. Lancez d'abord la simulation puis la confirmation.");
+        }
+
         JournalBatch batch = buildBatchFromStatement(statement, userId);
-        JournalBatch savedBatch = journalBatchRepository.save(batch);
-        List<JournalRow> rows = ensureJournalEntries(savedBatch, statement, userId);
-        String exportFilename = buildExportFilename(savedBatch);
-        return new JournalExportPayload(savedBatch, rows, exportFilename);
+        List<JournalRow> rows = new ArrayList<>(accountingEntries.size());
+        for (AccountingEntry entry : accountingEntries) {
+            rows.add(JournalRow.fromAccountingEntry(entry));
+        }
+        String exportFilename = buildExportFilename(batch);
+        return new JournalExportPayload(batch, rows, exportFilename);
     }
 
     private String buildCsv(List<JournalRow> rows) {
@@ -525,19 +530,6 @@ public class JournalController {
         return "journal_" + sanitized;
     }
 
-    private void seedJournalBatches(List<BankStatement> statements) {
-        for (BankStatement statement : statements) {
-            if (statement.getYear() == null || statement.getMonth() == null) {
-                continue;
-            }
-            if (journalBatchRepository.findByStatementId(statement.getId()).isPresent()) {
-                continue;
-            }
-            JournalBatch batch = buildBatchFromStatement(statement, "system");
-            journalBatchRepository.save(batch);
-        }
-    }
-
     private JournalBatch buildBatchFromStatement(BankStatement statement, String userId) {
         JournalBatch batch = new JournalBatch();
         batch.setStatementId(statement.getId());
@@ -548,45 +540,6 @@ public class JournalController {
         batch.setLabel(JOURNAL_LABEL);
         batch.setCreatedBy((userId == null || userId.isBlank()) ? "system" : userId);
         return batch;
-    }
-
-    private List<JournalRow> ensureJournalEntries(JournalBatch batch, BankStatement statement, String userId) {
-        if (journalEntryRepository.countByBatchId(batch.getId()) > 0) {
-            List<JournalEntry> existingEntries = journalEntryRepository.findByBatchIdOrderByNumeroAscIdAsc(batch.getId());
-            List<JournalRow> rows = new ArrayList<>(existingEntries.size());
-            for (JournalEntry entry : existingEntries) {
-                rows.add(JournalRow.fromJournalEntry(entry));
-            }
-            return rows;
-        }
-        if (accountingEntryRepository.countBySourceStatementId(statement.getId()) == 0) {
-            ComptabilisationWorkflowService.SimulationResult simulation = workflowService.simulate(statement.getId());
-            workflowService.confirm(simulation.simulationId(), userId);
-        }
-
-        workflowService.syncCptjournalFromExistingAccountingEntries(statement.getId());
-        List<AccountingEntry> entries = accountingEntryRepository.findBySourceStatementIdOrderByNumeroAscIdAsc(statement.getId());
-
-        List<JournalRow> rows = new ArrayList<>(entries.size());
-        for (AccountingEntry entry : entries) {
-            JournalEntry journalEntry = new JournalEntry();
-            journalEntry.setBatch(batch);
-            journalEntry.setNumero(entry.getNumero());
-            journalEntry.setMois(entry.getMois());
-            journalEntry.setNmois(entry.getNmois());
-            journalEntry.setDateComplete(entry.getDateComplete());
-            journalEntry.setJournal(entry.getNdosjrn());
-            journalEntry.setNcompte(entry.getNcompte());
-            journalEntry.setLibelle(entry.getEcriture());
-            journalEntry.setDebit(entry.getDebit());
-            journalEntry.setCredit(entry.getCredit());
-            journalEntry.setSourceTransactionId(entry.getSourceTransactionId());
-            journalEntry.setIsCounterpart(entry.getIsCounterpart());
-            batch.getEntries().add(journalEntry);
-            rows.add(JournalRow.fromAccountingEntry(entry));
-        }
-        journalBatchRepository.save(batch);
-        return rows;
     }
 
     private record JournalPeriod(Integer year, Integer month, String key) {

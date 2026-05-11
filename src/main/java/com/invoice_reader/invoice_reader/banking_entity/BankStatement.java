@@ -74,16 +74,16 @@ public class BankStatement {
     private String accountHolder;
 
     @Column(name = "apply_ttc_rule", nullable = false)
-    private Boolean applyTtcRule = false;
+    private Boolean applyTtcRule = true;
 
     @Column(name = "apply_frais_rule", nullable = false)
     private Boolean applyFraisRule = true;
 
     @Column(name = "apply_agios_rule", nullable = false)
-    private Boolean applyAgiosRule = false;
+    private Boolean applyAgiosRule = true;
 
     @Column(name = "apply_package_rule", nullable = false)
-    private Boolean applyPackageRule = false;
+    private Boolean applyPackageRule = true;
 
     // ==================== SOLDES ====================
 
@@ -189,6 +189,22 @@ public class BankStatement {
     @PreUpdate
     public void preUpdate() {
         this.updatedAt = LocalDateTime.now();
+    }
+
+    @PrePersist
+    public void prePersist() {
+        if (applyTtcRule == null) {
+            applyTtcRule = true;
+        }
+        if (applyFraisRule == null) {
+            applyFraisRule = true;
+        }
+        if (applyAgiosRule == null) {
+            applyAgiosRule = true;
+        }
+        if (applyPackageRule == null) {
+            applyPackageRule = true;
+        }
     }
 
     // ==================== MÉTIER ====================
