@@ -117,22 +117,8 @@ public class ComptabilisationWorkflowService {
             }
 
             if (cmExp != null && isCmAppliedEffective(tx, cmExp)) {
-                BigDecimal commissionHt = parseAmount(cmExp.commissionHt());
-                BigDecimal tvaSurCommissions = parseAmount(cmExp.tvaSurCommissions());
-                BigDecimal soldeNet = parseAmount(cmExp.cmMontant());
-                if (soldeNet.compareTo(BigDecimal.ZERO) == 0) {
-                    soldeNet = credit.compareTo(BigDecimal.ZERO) > 0 ? credit : debit;
-                }
-                BigDecimal totalRemise = soldeNet.add(commissionHt).add(tvaSurCommissions);
-
-                rows.add(new SimulatedEntry(numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
-                        TOTAL_REMISE_COMPTE, libelle, BigDecimal.ZERO, totalRemise, tx.getId(), false));
-                rows.add(new SimulatedEntry(numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
-                        COMMISSION_COMPTE, libelle, commissionHt, BigDecimal.ZERO, tx.getId(), false));
-                rows.add(new SimulatedEntry(numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
-                        TVA_COMPTE, libelle, tvaSurCommissions, BigDecimal.ZERO, tx.getId(), false));
-                rows.add(new SimulatedEntry(numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
-                        bankAccount, libelle, soldeNet, BigDecimal.ZERO, tx.getId(), true));
+                appendCmAccountingRows(rows, tx, cmExp, numeroMain, moisTexte, nmoisTexte,
+                        dateOperation, journal, bankAccount, libelle);
             } else {
                 rows.add(new SimulatedEntry(numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
                         contrepartie, libelle, debit, credit, tx.getId(), false));
@@ -347,6 +333,186 @@ public class ComptabilisationWorkflowService {
         }
     }
 
+    private void appendCmAccountingRows(
+            List<SimulatedEntry> rows,
+            BankTransaction tx,
+            CmExpansionDTO cmExp,
+            long numeroMain,
+            String moisTexte,
+            String nmoisTexte,
+            LocalDate dateOperation,
+            String journal,
+            String bankAccount,
+            String libelle) {
+        String structure = normalizeStructure(cmExp.cmBatchStructure());
+        BigDecimal commissionHt = parseAmount(cmExp.commissionHt());
+        BigDecimal tvaSurCommissions = parseAmount(cmExp.tvaSurCommissions());
+        BigDecimal soldeNet = parseAmount(cmExp.cmMontant());
+        if (soldeNet.compareTo(BigDecimal.ZERO) == 0) {
+            soldeNet = tx.getCredit() != null && tx.getCredit().compareTo(BigDecimal.ZERO) > 0
+                    ? tx.getCredit()
+                    : tx.getDebit();
+        }
+
+        if ("AMEX".equals(structure)) {
+            appendAmexCmAccountingRows(rows, tx, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                    bankAccount, libelle, soldeNet, commissionHt, tvaSurCommissions);
+            return;
+        }
+        if ("VPS".equals(structure)) {
+            appendVpsCmAccountingRows(rows, tx, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                    bankAccount, libelle, soldeNet, commissionHt, tvaSurCommissions);
+            return;
+        }
+        if ("BARID_BANK".equals(structure)) {
+            appendBaridCmAccountingRows(rows, tx, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                    bankAccount, libelle, soldeNet, commissionHt, tvaSurCommissions);
+            return;
+        }
+        if ("CMI".equals(structure)) {
+            appendCmiCmAccountingRows(rows, tx, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                    bankAccount, libelle, soldeNet, commissionHt, tvaSurCommissions);
+            return;
+        }
+        appendDefaultCmAccountingRows(rows, tx, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                bankAccount, libelle, soldeNet, commissionHt, tvaSurCommissions);
+    }
+
+    private void appendAmexCmAccountingRows(
+            List<SimulatedEntry> rows,
+            BankTransaction tx,
+            long numeroMain,
+            String moisTexte,
+            String nmoisTexte,
+            LocalDate dateOperation,
+            String journal,
+            String bankAccount,
+            String libelle,
+            BigDecimal soldeNet,
+            BigDecimal commissionHt,
+            BigDecimal tvaSurCommissions) {
+        BigDecimal grossAmount = resolveGrossAmount(soldeNet, commissionHt, tvaSurCommissions);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                TOTAL_REMISE_COMPTE, libelle, BigDecimal.ZERO, grossAmount, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                COMMISSION_COMPTE, libelle, commissionHt, BigDecimal.ZERO, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                TVA_COMPTE, libelle, tvaSurCommissions, BigDecimal.ZERO, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                bankAccount, libelle, soldeNet, BigDecimal.ZERO, tx.getId(), true);
+    }
+
+    private void appendVpsCmAccountingRows(
+            List<SimulatedEntry> rows,
+            BankTransaction tx,
+            long numeroMain,
+            String moisTexte,
+            String nmoisTexte,
+            LocalDate dateOperation,
+            String journal,
+            String bankAccount,
+            String libelle,
+            BigDecimal soldeNet,
+            BigDecimal commissionHt,
+            BigDecimal tvaSurCommissions) {
+        BigDecimal grossAmount = resolveGrossAmount(soldeNet, commissionHt, tvaSurCommissions);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                TOTAL_REMISE_COMPTE, libelle, BigDecimal.ZERO, grossAmount, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                COMMISSION_COMPTE, libelle, commissionHt, BigDecimal.ZERO, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                TVA_COMPTE, libelle, tvaSurCommissions, BigDecimal.ZERO, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                bankAccount, libelle, soldeNet, BigDecimal.ZERO, tx.getId(), true);
+    }
+
+    private void appendBaridCmAccountingRows(
+            List<SimulatedEntry> rows,
+            BankTransaction tx,
+            long numeroMain,
+            String moisTexte,
+            String nmoisTexte,
+            LocalDate dateOperation,
+            String journal,
+            String bankAccount,
+            String libelle,
+            BigDecimal soldeNet,
+            BigDecimal commissionHt,
+            BigDecimal tvaSurCommissions) {
+        BigDecimal grossAmount = resolveGrossAmount(soldeNet, commissionHt, tvaSurCommissions);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                TOTAL_REMISE_COMPTE, libelle, BigDecimal.ZERO, grossAmount, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                COMMISSION_COMPTE, libelle, commissionHt, BigDecimal.ZERO, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                TVA_COMPTE, libelle, tvaSurCommissions, BigDecimal.ZERO, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                bankAccount, libelle, soldeNet, BigDecimal.ZERO, tx.getId(), true);
+    }
+
+    private void appendDefaultCmAccountingRows(
+            List<SimulatedEntry> rows,
+            BankTransaction tx,
+            long numeroMain,
+            String moisTexte,
+            String nmoisTexte,
+            LocalDate dateOperation,
+            String journal,
+            String bankAccount,
+            String libelle,
+            BigDecimal soldeNet,
+            BigDecimal commissionHt,
+            BigDecimal tvaSurCommissions) {
+        BigDecimal grossAmount = resolveGrossAmount(soldeNet, commissionHt, tvaSurCommissions);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                TOTAL_REMISE_COMPTE, libelle, BigDecimal.ZERO, grossAmount, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                COMMISSION_COMPTE, libelle, commissionHt, BigDecimal.ZERO, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                TVA_COMPTE, libelle, tvaSurCommissions, BigDecimal.ZERO, tx.getId(), false);
+        appendCmRow(rows, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                bankAccount, libelle, soldeNet, BigDecimal.ZERO, tx.getId(), true);
+    }
+
+    private void appendCmiCmAccountingRows(
+            List<SimulatedEntry> rows,
+            BankTransaction tx,
+            long numeroMain,
+            String moisTexte,
+            String nmoisTexte,
+            LocalDate dateOperation,
+            String journal,
+            String bankAccount,
+            String libelle,
+            BigDecimal soldeNet,
+            BigDecimal commissionHt,
+            BigDecimal tvaSurCommissions) {
+        appendDefaultCmAccountingRows(rows, tx, numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                bankAccount, libelle, soldeNet, commissionHt, tvaSurCommissions);
+    }
+
+    private void appendCmRow(
+            List<SimulatedEntry> rows,
+            long numeroMain,
+            String moisTexte,
+            String nmoisTexte,
+            LocalDate dateOperation,
+            String journal,
+            String account,
+            String libelle,
+            BigDecimal debit,
+            BigDecimal credit,
+            Long sourceTransactionId,
+            boolean counterpart) {
+        BigDecimal safeDebit = debit == null ? BigDecimal.ZERO : debit;
+        BigDecimal safeCredit = credit == null ? BigDecimal.ZERO : credit;
+        if (safeDebit.compareTo(BigDecimal.ZERO) == 0 && safeCredit.compareTo(BigDecimal.ZERO) == 0) {
+            return;
+        }
+        rows.add(new SimulatedEntry(numeroMain, moisTexte, nmoisTexte, dateOperation, journal,
+                account, libelle, safeDebit, safeCredit, sourceTransactionId, counterpart));
+    }
+
     private boolean isCmAppliedEffective(BankTransaction tx, CmExpansionDTO cmExp) {
         if (tx == null || cmExp == null) {
             return false;
@@ -358,6 +524,26 @@ public class ComptabilisationWorkflowService {
             return true;
         }
         return true;
+    }
+
+    private BigDecimal resolveGrossAmount(BigDecimal netAmount,
+                                          BigDecimal commissionHt,
+                                          BigDecimal tvaSurCommissions) {
+        BigDecimal gross = netAmount == null ? BigDecimal.ZERO : netAmount;
+        if (commissionHt != null) {
+            gross = gross.add(commissionHt);
+        }
+        if (tvaSurCommissions != null) {
+            gross = gross.add(tvaSurCommissions);
+        }
+        return gross;
+    }
+
+    private String normalizeStructure(String structure) {
+        if (structure == null) {
+            return "";
+        }
+        return structure.trim().toUpperCase();
     }
 
     private long resolveTransactionNumero(BankTransaction tx, long fallbackNumero) {

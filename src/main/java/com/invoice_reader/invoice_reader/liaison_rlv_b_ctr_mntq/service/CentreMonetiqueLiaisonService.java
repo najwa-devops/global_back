@@ -719,24 +719,19 @@ public class CentreMonetiqueLiaisonService {
 
         for (CentreMonetiqueTransaction tx : cmTxs) {
             String section = nvl(tx.getSection()).trim().toUpperCase(Locale.ROOT);
-            if (section.startsWith("REGLEMENT ")
-                    && !section.equals("REGLEMENT META")
-                    && !section.equals("REGLEMENT TOTALS")) {
+            if (section.equals("REGLEMENT META")) {
                 if (!currentBlockTxs.isEmpty() && (currentMontant != null || !currentReglementId.isBlank())) {
                     appendBaridExpansion(result, batch, currentDate, currentReglementId, currentMontant,
                             currentCommissionHt, currentTvaSurCommissions, currentBlockTxs, bankByAmount,
                             usedBankTxIds);
+                    currentBlockTxs = new ArrayList<>();
                 }
-                currentDate = null;
-                currentMontant = null;
-                currentReglementId = nvl(tx.getReference());
-                currentCommissionHt = null;
-                currentTvaSurCommissions = null;
-                currentBlockTxs = new ArrayList<>();
-                currentBlockTxs.add(tx);
-            } else if (section.equals("REGLEMENT META")) {
                 String d = nvl(tx.getDate());
                 if (!d.isBlank()) currentDate = d;
+            } else if (section.startsWith("REGLEMENT ")
+                    && !section.equals("REGLEMENT META")
+                    && !section.equals("REGLEMENT TOTALS")) {
+                currentBlockTxs.add(tx);
             } else if (section.equals("REGLEMENT TOTALS")) {
                 currentMontant = firstNonZero(tx.getMontant(), tx.getCredit(), tx.getDebit());
                 currentReglementId = nvl(tx.getReference());
@@ -750,14 +745,21 @@ public class CentreMonetiqueLiaisonService {
                         currentTvaSurCommissions = fallbackCredit;
                     }
                 }
+                appendBaridExpansion(result, batch, currentDate, currentReglementId, currentMontant,
+                        currentCommissionHt, currentTvaSurCommissions, currentBlockTxs, bankByAmount,
+                        usedBankTxIds);
+                currentDate = null;
+                currentMontant = null;
+                currentReglementId = "";
+                currentCommissionHt = null;
+                currentTvaSurCommissions = null;
+                currentBlockTxs = new ArrayList<>();
             } else if (section.equals("TOTAL COMMISSIONS HT")) {
                 currentCommissionHt = firstNonZero(tx.getMontant(), tx.getDebit(), tx.getCredit());
             } else if (section.equals("TOTAL TVA SUR COMMISSIONS")) {
                 currentTvaSurCommissions = firstNonZero(tx.getMontant(), tx.getCredit(), tx.getDebit());
             }
         }
-        appendBaridExpansion(result, batch, currentDate, currentReglementId, currentMontant,
-                currentCommissionHt, currentTvaSurCommissions, currentBlockTxs, bankByAmount, usedBankTxIds);
         return result;
     }
 
@@ -784,9 +786,12 @@ public class CentreMonetiqueLiaisonService {
         usedBankTxIds.add(bankTx.getId());
         String blockDate = (currentDate != null && !currentDate.isBlank())
                 ? currentDate : nvl(currentBlockTxs.get(0).getDate());
-        String reglementLabel = currentReglementId == null || currentReglementId.isBlank()
-                ? "REGLEMENT"
-                : "REGLEMENT " + currentReglementId;
+        int count = currentBlockTxs.size();
+        String reglementLabel = count == 1
+                ? (currentReglementId == null || currentReglementId.isBlank()
+                    ? "REGLEMENT"
+                    : "REGLEMENT " + currentReglementId)
+                : count + " transactions CM";
         List<CmExpansionLineDTO> lines = currentBlockTxs.stream()
                 .map(t -> new CmExpansionLineDTO(blockDate, nvl(t.getReference()),
                         nvl(t.getDcFlag()), toAmount(t.getMontant())))
