@@ -1,8 +1,8 @@
 package com.invoice_reader.invoice_reader.security;
 
-import com.invoice_reader.invoice_reader.entity.auth.UserRole;
-import com.invoice_reader.invoice_reader.servises.auth.AuthService;
-import com.invoice_reader.invoice_reader.servises.auth.SessionUser;
+import com.invoice_reader.invoice_reader.database.entity.auth.UserRole;
+import com.invoice_reader.invoice_reader.auth.service.AuthService;
+import com.invoice_reader.invoice_reader.auth.service.SessionUser;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

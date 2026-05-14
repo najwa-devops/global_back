@@ -1,6 +1,6 @@
 package com.invoice_reader.invoice_reader.security;
 
-import com.invoice_reader.invoice_reader.entity.auth.UserRole;
+import com.invoice_reader.invoice_reader.database.entity.auth.UserRole;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
