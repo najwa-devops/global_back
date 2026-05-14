@@ -16,6 +16,8 @@ public interface AccountDao extends JpaRepository<Account, Long> {
     // ===================== RECHERCHE PAR CODE =====================
     Optional<Account> findByCode(String code);
 
+    Optional<Account> findFirstByIceAndActiveTrueOrderByUpdatedAtDesc(String ice);
+
     boolean existsByCode(String code);
 
     // ===================== RECHERCHE PAR CLASSE =====================
@@ -58,7 +60,7 @@ public interface AccountDao extends JpaRepository<Account, Long> {
     @Query("SELECT a FROM Account a WHERE a.classe = 6 AND a.active = true ORDER BY a.code ASC")
     List<Account> findChargeAccounts();
 
-    @Query("SELECT a FROM Account a WHERE (a.code LIKE '345%' OR a.code LIKE '445%') AND a.active = true ORDER BY a.code ASC")
+    @Query("SELECT a FROM Account a WHERE (a.code LIKE '3455%' OR a.code LIKE '4455%') AND a.active = true ORDER BY a.code ASC")
     List<Account> findTvaAccounts();
 
     // ===================== STATISTIQUES =====================

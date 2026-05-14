@@ -1311,9 +1311,9 @@ public class SalesInvoiceController {
                     autoFilledFields.add("collectifAccount");
                 }
 
-                fieldsData.put("chargeAccount", tier.getDefaultChargeAccount());
-                fieldsData.put("tvaAccount", tier.getTvaAccount());
-                fieldsData.put("tvaRate", tier.getDefaultTvaRate());
+                fieldsData.put("chargeAccount", tier.getEffectiveChargeAccount());
+                fieldsData.put("tvaAccount", tier.getEffectiveTvaAccount());
+                fieldsData.put("tvaRate", tier.getEffectiveTvaRate());
 
                 autoFilledFields.add("chargeAccount");
                 autoFilledFields.add("tvaAccount");
@@ -1758,14 +1758,14 @@ public class SalesInvoiceController {
                 tierData.put("ice", tier.getIce() != null ? tier.getIce() : "");
                 tierData.put("rcNumber", tier.getRcNumber() != null ? tier.getRcNumber() : "");
                 tierData.put("defaultChargeAccount", tier.getDefaultChargeAccount() != null ? tier.getDefaultChargeAccount() : "");
+                tierData.put("defaultChargeAccount2", tier.getDefaultChargeAccount2() != null ? tier.getDefaultChargeAccount2() : "");
                 tierData.put("tvaAccount", tier.getTvaAccount() != null ? tier.getTvaAccount() : "");
+                tierData.put("tvaAccount2", tier.getTvaAccount2() != null ? tier.getTvaAccount2() : "");
                 tierData.put("defaultTvaRate", tier.getDefaultTvaRate() != null ? tier.getDefaultTvaRate() : 0.0);
+                tierData.put("defaultTvaRate2", tier.getDefaultTvaRate2() != null ? tier.getDefaultTvaRate2() : 0.0);
                 tierData.put("active", tier.getActive());
 
-                boolean hasAccountingConfig = tier.getDefaultChargeAccount() != null
-                        && !tier.getDefaultChargeAccount().isBlank()
-                        && tier.getTvaAccount() != null
-                        && !tier.getTvaAccount().isBlank();
+                boolean hasAccountingConfig = tier.hasAccountingConfiguration();
                 tierData.put("hasAccountingConfig", hasAccountingConfig);
 
                 response.put("tier", tierData);
@@ -1774,9 +1774,9 @@ public class SalesInvoiceController {
                     if (tier.getAuxiliaireMode() != null && tier.getAuxiliaireMode()) {
                         fieldsData.put("collectifAccount", tier.getCollectifAccount());
                     }
-                    fieldsData.put("chargeAccount", tier.getDefaultChargeAccount());
-                    fieldsData.put("tvaAccount", tier.getTvaAccount());
-                    fieldsData.put("tvaRate", tier.getDefaultTvaRate());
+                    fieldsData.put("chargeAccount", tier.getEffectiveChargeAccount());
+                    fieldsData.put("tvaAccount", tier.getEffectiveTvaAccount());
+                    fieldsData.put("tvaRate", tier.getEffectiveTvaRate());
                 }
                 response.put("fieldsData", fieldsData);
             } else {
@@ -1805,8 +1805,11 @@ public class SalesInvoiceController {
                 .ice(dto.getIce())
                 .rcNumber(dto.getRcNumber())
                 .defaultChargeAccount(dto.getDefaultChargeAccount())
+                .defaultChargeAccount2(dto.getDefaultChargeAccount2())
                 .tvaAccount(dto.getTvaAccount())
+                .tvaAccount2(dto.getTvaAccount2())
                 .defaultTvaRate(dto.getDefaultTvaRate())
+                .defaultTvaRate2(dto.getDefaultTvaRate2())
                 .active(dto.getActive())
                 .build();
     }

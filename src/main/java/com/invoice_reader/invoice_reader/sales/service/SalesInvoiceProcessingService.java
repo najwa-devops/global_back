@@ -5,11 +5,13 @@ import com.invoice_reader.invoice_reader.entity.account_tier.Tier;
 import com.invoice_reader.invoice_reader.entity.auth.Dossier;
 import com.invoice_reader.invoice_reader.entity.dynamic.DocumentType;
 import com.invoice_reader.invoice_reader.entity.dynamic.DynamicTemplate;
+import com.invoice_reader.invoice_reader.entity.account_tier.Account;
 import com.invoice_reader.invoice_reader.entity.invoice.InvoiceStatus;
 import com.invoice_reader.invoice_reader.entity.template.SignatureType;
 import com.invoice_reader.invoice_reader.entity.template.TemplateSignature;
 import com.invoice_reader.invoice_reader.repository.DossierDao;
 import com.invoice_reader.invoice_reader.repository.DossierGeneralParamsDao;
+import com.invoice_reader.invoice_reader.repository.AccountDao;
 import com.invoice_reader.invoice_reader.sales.entity.SalesInvoice;
 import com.invoice_reader.invoice_reader.sales.repository.SalesInvoiceRepository;
 import com.invoice_reader.invoice_reader.servises.FileStorageService;
@@ -66,6 +68,7 @@ public class SalesInvoiceProcessingService {
     private final SalesAlphaAgentExtractionService salesAlphaAgentExtractionService;
     private final SalesInvoiceRepository salesInvoiceRepository;
     private final TierService tierService;
+    private final AccountDao accountDao;
     private final AdvancedOcrService advancedOcrService;
     private final FileStorageService fileStorageService;
     private final FieldPatternService fieldPatternService;
@@ -339,24 +342,18 @@ public class SalesInvoiceProcessingService {
 
         applyMissingFieldsFallback(ocrText, fieldsData, template, extractionResult);
 
+        // Enrichissement métier: on prend l'ICE du partenaire, différent de l'ICE du dossier,
+        // puis on complète depuis la table Compte.
+        enrichSupplierDataFromAccount(invoice.getDossierId(), ocrText, fieldsData, autoFilledFields);
+
         // Vérifier la période d'exercice (si configurée)
         boolean withinExercisePeriod = validateInvoiceDateWithinExercise(invoice, fieldsData);
 
-        // RÈGLE VENTE: forcer l'ICE avec le PREMIER ICE détecté dans le document
-        // (= ICE du client/destinataire, pas l'ICE de l'émetteur dans le footer)
-        if (signature != null
-                && signature.getSignatureType() == SignatureType.ICE
-                && signature.getSignatureValue() != null
-                && !signature.getSignatureValue().isBlank()) {
-            fieldsData.put("ice", signature.getSignatureValue());
-            log.info("ICE forcé depuis premier ICE document (VENTE): {}", signature.getSignatureValue());
-        }
-
-        // RÈGLE ICE DOSSIER (VENTE): l'ICE client extrait doit être identique à l'ICE du dossier.
+        // RÈGLE ICE DOSSIER: l'ICE du partenaire doit être différent de l'ICE du dossier.
         String dossierIceWarning = evaluateDossierIceRule(invoice.getDossierId(), fieldsData, false);
 
-        // ÉTAPE 7: LIAISON TIER AUTOMATIQUE (par ICE uniquement)
-        log.info("Liaison Tier automatique (ICE uniquement)...");
+        // ÉTAPE 7: LIAISON TIER AUTOMATIQUE (par ICE)
+        log.info("Liaison Tier automatique...");
         linkInvoiceToTier(invoice, fieldsData, autoFilledFields);
 
         // ÉTAPE 8: CALCUL MONTANTS
@@ -624,18 +621,18 @@ public class SalesInvoiceProcessingService {
                     autoFilledFields.add("collectifAccount");
                 }
 
-                fieldsData.put("chargeAccount", tier.getDefaultChargeAccount());
-                fieldsData.put("tvaAccount", tier.getTvaAccount());
-                fieldsData.put("tvaRate", tier.getDefaultTvaRate());
+                fieldsData.put("chargeAccount", tier.getEffectiveChargeAccount());
+                fieldsData.put("tvaAccount", tier.getEffectiveTvaAccount());
+                fieldsData.put("tvaRate", tier.getEffectiveTvaRate());
                 fieldsData.put("tvaRateSource", "ACCOUNT");
-                fieldsData.put("tvaRateUsed", tier.getDefaultTvaRate());
+                fieldsData.put("tvaRateUsed", tier.getEffectiveTvaRate());
 
                 autoFilledFields.add("chargeAccount");
                 autoFilledFields.add("tvaAccount");
                 autoFilledFields.add("tvaRate");
 
                 log.info("Comptes comptables auto-remplis: tierNumber={}, charge={}, tva={}",
-                        tier.getTierNumber(), tier.getDefaultChargeAccount(), tier.getTvaAccount());
+                        tier.getTierNumber(), tier.getEffectiveChargeAccount(), tier.getEffectiveTvaAccount());
             }
         }
     }
@@ -719,8 +716,11 @@ public class SalesInvoiceProcessingService {
                 .ice(dto.getIce())
                 .rcNumber(dto.getRcNumber())
                 .defaultChargeAccount(dto.getDefaultChargeAccount())
+                .defaultChargeAccount2(dto.getDefaultChargeAccount2())
                 .tvaAccount(dto.getTvaAccount())
+                .tvaAccount2(dto.getTvaAccount2())
                 .defaultTvaRate(dto.getDefaultTvaRate())
+                .defaultTvaRate2(dto.getDefaultTvaRate2())
                 .active(dto.getActive())
                 .build();
     }
@@ -1016,16 +1016,191 @@ public class SalesInvoiceProcessingService {
         }
 
         boolean matches = dossierIce.equals(extractedIce);
-        if (purchaseFlow && matches) {
-            fieldsData.put("iceRuleStatus", "PURCHASE_ICE_MATCHES_DOSSIER");
-            return "ICE dossier identique à ICE facture achat: document probablement facture de vente.";
-        }
-        if (!purchaseFlow && !matches) {
-            fieldsData.put("iceRuleStatus", "SALES_ICE_DIFFERS_FROM_DOSSIER");
-            return "ICE dossier différent de l'ICE facture vente: document probablement facture d'achat.";
+        if (matches) {
+            fieldsData.put("iceRuleStatus", purchaseFlow
+                    ? "PURCHASE_ICE_MATCHES_DOSSIER"
+                    : "SALES_ICE_MATCHES_DOSSIER");
+            return "ICE facture identique à ICE dossier: vérification manuelle requise.";
         }
         fieldsData.put("iceRuleStatus", "OK");
         return null;
+    }
+
+    private void enrichSupplierDataFromAccount(Long dossierId,
+                                               String ocrText,
+                                               Map<String, Object> fieldsData,
+                                               List<String> autoFilledFields) {
+        String dossierIce = getDossierIce(dossierId);
+        String candidateIce = resolveCounterpartyIce(ocrText, fieldsData, dossierIce);
+        if (candidateIce == null) {
+            return;
+        }
+
+        fieldsData.put("ice", candidateIce);
+        markAutoFilled(autoFilledFields, "ice");
+        fieldsData.put("detectedIceCandidates", extractIceCandidates(ocrText));
+        fieldsData.put("resolvedCounterpartyIce", candidateIce);
+
+        accountDao.findFirstByIceAndActiveTrueOrderByUpdatedAtDesc(candidateIce)
+                .ifPresent(account -> applyAccountDefaults(fieldsData, autoFilledFields, account));
+    }
+
+    private void applyAccountDefaults(Map<String, Object> fieldsData,
+                                      List<String> autoFilledFields,
+                                      Account account) {
+        Map<String, Object> fixedSupplierData = new LinkedHashMap<>();
+        fixedSupplierData.put("ice", normalizeIce(account.getIce()));
+        fixedSupplierData.put("ifNumber", trimToNull(account.getIdF()));
+        fixedSupplierData.put("rcNumber", trimToNull(account.getRc()));
+        fixedSupplierData.put("supplier", trimToNull(account.getLibelle()));
+        fixedSupplierData.put("activity", trimToNull(account.getActivite()));
+        fixedSupplierData.put("chargeAccount", trimToNull(account.getCharge()));
+        fixedSupplierData.put("tvaAccount", trimToNull(account.getTva()));
+        fixedSupplierData.put("tvaRate", account.getTvaRate());
+        fixedSupplierData.put("taxCode", trimToNull(account.getTaxCode()));
+        fixedSupplierData.put("accountCode", trimToNull(account.getCode()));
+        fieldsData.put("fixedSupplierData", fixedSupplierData);
+
+        putIfBlank(fieldsData, "supplier", account.getLibelle(), autoFilledFields);
+        putIfBlank(fieldsData, "activity", account.getActivite(), autoFilledFields);
+        putIfBlank(fieldsData, "ifNumber", account.getIdF(), autoFilledFields);
+        putIfBlank(fieldsData, "rcNumber", account.getRc(), autoFilledFields);
+        putIfBlank(fieldsData, "chargeAccount", account.getCharge(), autoFilledFields);
+        putIfBlank(fieldsData, "tvaAccount", account.getTva(), autoFilledFields);
+        putIfBlank(fieldsData, "tvaRate", account.getTvaRate(), autoFilledFields);
+        putIfBlank(fieldsData, "taxCode", account.getTaxCode(), autoFilledFields);
+    }
+
+    private void putIfBlank(Map<String, Object> fieldsData,
+                            String key,
+                            Object value,
+                            List<String> autoFilledFields) {
+        if (value == null) {
+            return;
+        }
+        Object current = fieldsData.get(key);
+        if (current == null || String.valueOf(current).isBlank()) {
+            fieldsData.put(key, value);
+            markAutoFilled(autoFilledFields, key);
+        }
+    }
+
+    private void markAutoFilled(List<String> autoFilledFields, String key) {
+        if (autoFilledFields == null || key == null || key.isBlank()) {
+            return;
+        }
+        if (!autoFilledFields.contains(key)) {
+            autoFilledFields.add(key);
+        }
+    }
+
+    private String resolveCounterpartyIce(String ocrText,
+                                          Map<String, Object> fieldsData,
+                                          String dossierIce) {
+        String normalizedDossierIce = normalizeIce(dossierIce);
+        LinkedHashSet<String> candidates = new LinkedHashSet<>(extractIceCandidates(ocrText));
+        candidates.addAll(extractIceCandidatesFromValue(fieldsData != null ? fieldsData.get("ice") : null));
+
+        if (candidates.isEmpty()) {
+            return null;
+        }
+
+        List<String> preferred = new ArrayList<>();
+        for (String candidate : candidates) {
+            if (candidate == null || candidate.isBlank()) {
+                continue;
+            }
+            if (normalizedDossierIce == null || !normalizedDossierIce.equals(candidate)) {
+                preferred.add(candidate);
+            }
+        }
+
+        if (!preferred.isEmpty()) {
+            return preferred.get(0);
+        }
+
+        if (normalizedDossierIce != null && candidates.contains(normalizedDossierIce)) {
+            return null;
+        }
+
+        return candidates.iterator().next();
+    }
+
+    private List<String> extractIceCandidates(String text) {
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+
+        LinkedHashSet<String> explicitMatches = new LinkedHashSet<>();
+        LinkedHashSet<String> fallbackMatches = new LinkedHashSet<>();
+
+        for (int i = 0; i < ExtractionPatterns.ICE_PATTERNS.length; i++) {
+            Pattern pattern = Pattern.compile(ExtractionPatterns.ICE_PATTERNS[i], Pattern.CASE_INSENSITIVE);
+            Matcher matcher = pattern.matcher(text);
+            while (matcher.find()) {
+                String candidate = normalizeIce(matcher.group(1));
+                if (candidate == null) {
+                    continue;
+                }
+                if (i == ExtractionPatterns.ICE_PATTERNS.length - 1) {
+                    fallbackMatches.add(candidate);
+                } else {
+                    explicitMatches.add(candidate);
+                }
+            }
+        }
+
+        if (!explicitMatches.isEmpty()) {
+            return new ArrayList<>(explicitMatches);
+        }
+        return new ArrayList<>(fallbackMatches);
+    }
+
+    private List<String> extractIceCandidatesFromValue(Object rawValue) {
+        if (rawValue == null) {
+            return List.of();
+        }
+        if (rawValue instanceof Collection<?> collection) {
+            List<String> values = new ArrayList<>();
+            for (Object item : collection) {
+                String normalized = normalizeIce(item != null ? String.valueOf(item) : null);
+                if (normalized != null) {
+                    values.add(normalized);
+                }
+            }
+            return values;
+        }
+        if (rawValue.getClass().isArray()) {
+            List<String> values = new ArrayList<>();
+            int length = java.lang.reflect.Array.getLength(rawValue);
+            for (int i = 0; i < length; i++) {
+                Object item = java.lang.reflect.Array.get(rawValue, i);
+                String normalized = normalizeIce(item != null ? String.valueOf(item) : null);
+                if (normalized != null) {
+                    values.add(normalized);
+                }
+            }
+            return values;
+        }
+        String normalized = normalizeIce(String.valueOf(rawValue));
+        return normalized != null ? List.of(normalized) : List.of();
+    }
+
+    private String getDossierIce(Long dossierId) {
+        if (dossierId == null) {
+            return null;
+        }
+        return dossierGeneralParamsDao.findByDossierId(dossierId)
+                .map(params -> normalizeIce(params.getIce()))
+                .orElse(null);
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.isBlank() ? null : normalized;
     }
 
     private String normalizeIce(String value) {

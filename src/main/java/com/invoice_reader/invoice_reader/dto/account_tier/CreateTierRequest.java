@@ -24,7 +24,9 @@ import lombok.NoArgsConstructor;
  *   - tierNumber: TOUJOURS 9 chiffres
  *   - collectifAccount: 9 chiffres (si mode auxiliaire)
  *   - defaultChargeAccount: 9 chiffres
+ *   - defaultChargeAccount2: 9 chiffres
  *   - tvaAccount: 9 chiffres
+ *   - tvaAccount2: 9 chiffres
  */
 @Data
 @NoArgsConstructor
@@ -57,6 +59,12 @@ public class CreateTierRequest {
     @Pattern(regexp = "^[A-Z0-9\\-]+$|^$",
             message = "Le numéro de tier ne peut contenir que des lettres majuscules, chiffres et tirets")
     private String tierNumber;
+
+    /**
+     * Code tier métier
+     */
+    @Size(max = 80, message = "Le code tier ne doit pas dépasser 80 caractères")
+    private String codeTier;
 
     /**
      * Compte collectif (mode auxiliaire uniquement)
@@ -119,6 +127,10 @@ public class CreateTierRequest {
             message = "Le compte de charge doit contenir exactement 9 chiffres")
     private String defaultChargeAccount;
 
+    @Pattern(regexp = "^\\d{9}$|^$",
+            message = "Le compte de charge doit contenir exactement 9 chiffres")
+    private String defaultChargeAccount2;
+
     /**
      * Compte TVA
      * Format: EXACTEMENT 9 chiffres
@@ -128,6 +140,10 @@ public class CreateTierRequest {
             message = "Le compte TVA doit contenir exactement 9 chiffres")
     private String tvaAccount;
 
+    @Pattern(regexp = "^\\d{9}$|^$",
+            message = "Le compte TVA doit contenir exactement 9 chiffres")
+    private String tvaAccount2;
+
     /**
      * Taux de TVA par défaut
      * OPTIONNEL
@@ -135,6 +151,10 @@ public class CreateTierRequest {
     @Min(value = 0, message = "Le taux de TVA doit être positif")
     @Max(value = 100, message = "Le taux de TVA ne peut pas dépasser 100%")
     private Double defaultTvaRate;
+
+    @Min(value = 0, message = "Le taux de TVA doit être positif")
+    @Max(value = 100, message = "Le taux de TVA ne peut pas dépasser 100%")
+    private Double defaultTvaRate2;
 
     // ===================== STATUT =====================
 
@@ -159,6 +179,9 @@ public class CreateTierRequest {
             if (tierNumber == null || tierNumber.isBlank()) {
                 throw new IllegalArgumentException("Le numéro de tier est requis en mode auxiliaire");
             }
+            if (codeTier == null || codeTier.isBlank()) {
+                throw new IllegalArgumentException("Le code tier est requis en mode auxiliaire");
+            }
             if (collectifAccount == null || collectifAccount.isBlank()) {
                 throw new IllegalArgumentException("Le compte collectif est requis en mode auxiliaire");
             }
@@ -181,31 +204,34 @@ public class CreateTierRequest {
     }
 
     private void validateTvaConfiguration() {
-        boolean hasTvaAccount = tvaAccount != null && !tvaAccount.isBlank();
-        boolean hasTvaRate = defaultTvaRate != null;
+        validatePair(defaultChargeAccount, tvaAccount, defaultTvaRate, "1");
+        validatePair(defaultChargeAccount2, tvaAccount2, defaultTvaRate2, "2");
+    }
 
-        // CAS 1: Compte fourni SANS taux → ERREUR
+    private void validatePair(String chargeAccount, String tvaAccount, Double rate, String suffix) {
+        boolean hasCharge = chargeAccount != null && !chargeAccount.isBlank();
+        boolean hasTvaAccount = tvaAccount != null && !tvaAccount.isBlank();
+        boolean hasTvaRate = rate != null;
+
         if (hasTvaAccount && !hasTvaRate) {
             throw new IllegalArgumentException(
-                    "Le taux de TVA est OBLIGATOIRE quand un compte TVA est fourni. " +
-                            "Exemple: tvaAccount='34552' + defaultTvaRate=20.0"
+                    "Le taux de TVA est OBLIGATOIRE quand un compte TVA " + suffix + " est fourni"
             );
         }
 
-        // CAS 2: Taux fourni SANS compte → ERREUR
         if (hasTvaRate && !hasTvaAccount) {
             throw new IllegalArgumentException(
-                    "Le compte TVA est OBLIGATOIRE quand un taux de TVA est fourni. " +
-                            "Exemple: tvaAccount='34552' + defaultTvaRate=20.0"
+                    "Le compte TVA " + suffix + " est OBLIGATOIRE quand un taux de TVA est fourni"
             );
         }
 
-        // CAS 3: Les deux fournis → OK, vérifier cohérence
         if (hasTvaAccount && hasTvaRate) {
-            validateTvaRateValue(defaultTvaRate);
+            validateTvaRateValue(rate);
         }
 
-        // CAS 4: Aucun des deux → OK (TVA optionnelle)
+        if (hasCharge && !hasTvaAccount) {
+            // On autorise le compte HT seul, il peut servir de redondance.
+        }
     }
 
     /**

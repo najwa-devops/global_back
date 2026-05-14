@@ -47,6 +47,7 @@ public class UpdateAccountRequest {
     private String rc;
     private String rib;
     private String tva;
+    private String taxCode;
     private String charge;
 
     /**

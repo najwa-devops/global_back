@@ -45,6 +45,7 @@ public class CreateAccountRequest {
     private String rc;
     private String rib;
     private String tva;
+    private String taxCode;
     private String charge;
 
     private String createdBy;

@@ -22,6 +22,18 @@ public class AccountService {
 
     private final AccountDao accountDao;
 
+    private boolean isTaxAccountCode(String code) {
+        return code != null && (code.startsWith("3455") || code.startsWith("4455"));
+    }
+
+    private String normalizeTaxCode(String taxCode) {
+        if (taxCode == null) {
+            return null;
+        }
+        String normalized = taxCode.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
     // ===================== CRUD =====================
 
     /**
@@ -41,11 +53,13 @@ public class AccountService {
         }
 
         // Creation de l'entite
+        boolean taxAccount = isTaxAccountCode(request.getCode());
         Account account = Account.builder()
                 .code(request.getCode())
                 .libelle(request.getLibelle())
                 .classe(request.getClasse())
-                .tvaRate(request.getTvaRate())
+                .tvaRate(taxAccount ? request.getTvaRate() : 0d)
+                .taxCode(taxAccount ? normalizeTaxCode(request.getTaxCode()) : null)
                 .active(request.getActive() != null ? request.getActive() : true)
                 .xCom(request.getXCom())
                 .delai(request.getDelai())
@@ -102,9 +116,16 @@ public class AccountService {
             log.debug("  Statut actif mis à jour: {}", request.getActive());
         }
 
+        boolean taxAccount = isTaxAccountCode(account.getCode());
+
         if (request.getTvaRate() != null) {
-            account.setTvaRate(request.getTvaRate());
-            log.debug("  Taux TVA mis à jour: {}", request.getTvaRate());
+            account.setTvaRate(taxAccount ? request.getTvaRate() : 0d);
+            log.debug("  Taux TVA mis à jour: {}", account.getTvaRate());
+        }
+
+        account.setTaxCode(taxAccount ? normalizeTaxCode(request.getTaxCode()) : null);
+        if (taxAccount) {
+            log.debug("  Code taxe mis à jour: {}", account.getTaxCode());
         }
 
         if (request.getXCom() != null) account.setXCom(request.getXCom());
@@ -158,6 +179,16 @@ public class AccountService {
                 .map(AccountDto::fromEntity);
     }
 
+    @Transactional(readOnly = true)
+    public Optional<AccountDto> getAccountByIce(String ice) {
+        String normalizedIce = normalizeIce(ice);
+        if (normalizedIce == null) {
+            return Optional.empty();
+        }
+        return accountDao.findFirstByIceAndActiveTrueOrderByUpdatedAtDesc(normalizedIce)
+                .map(AccountDto::fromEntity);
+    }
+
     /**
      * Récupère tous les comptes actifs, triés par code
      * @return Liste des comptes actifs
@@ -188,6 +219,14 @@ public class AccountService {
                         "libelle", account.getLibelle()
                 ))
                 .collect(Collectors.toList());
+    }
+
+    private String normalizeIce(String ice) {
+        if (ice == null) {
+            return null;
+        }
+        String normalized = ice.replaceAll("\\D", "");
+        return normalized.isBlank() ? null : normalized;
     }
 
     /**

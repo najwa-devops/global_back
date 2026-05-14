@@ -72,30 +72,32 @@ public interface TierDao extends JpaRepository<Tier, Long> {
             "LOWER(t.libelle) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
             "t.ice LIKE CONCAT('%', :query, '%') OR " +
             "t.ifNumber LIKE CONCAT('%', :query, '%') OR " +
+            "t.rcNumber LIKE CONCAT('%', :query, '%') OR " +
             "t.tierNumber LIKE CONCAT('%', :query, '%') OR " +
+            "t.codeTier LIKE CONCAT('%', :query, '%') OR " +
             "t.collectifAccount LIKE CONCAT('%', :query, '%'))")
     List<Tier> search(@Param("dossierId") Long dossierId, @Param("query") String query);
 
     // ===================== FILTRES CONFIGURATION COMPTABLE =====================
 
     @Query("SELECT t FROM Tier t WHERE t.dossierId = :dossierId AND " +
-            "t.defaultChargeAccount IS NOT NULL AND " +
-            "t.tvaAccount IS NOT NULL")
+            "((t.defaultChargeAccount IS NOT NULL AND t.tvaAccount IS NOT NULL) OR " +
+            "(t.defaultChargeAccount2 IS NOT NULL AND t.tvaAccount2 IS NOT NULL))")
     List<Tier> findWithAccountingConfiguration(@Param("dossierId") Long dossierId);
 
     @Query("SELECT t FROM Tier t WHERE t.dossierId = :dossierId AND (" +
-            "t.defaultChargeAccount IS NULL OR " +
-            "t.tvaAccount IS NULL)")
+            "(t.defaultChargeAccount IS NULL OR t.tvaAccount IS NULL) AND " +
+            "(t.defaultChargeAccount2 IS NULL OR t.tvaAccount2 IS NULL))")
     List<Tier> findWithoutAccountingConfiguration(@Param("dossierId") Long dossierId);
 
     @Query("SELECT COUNT(t) FROM Tier t WHERE t.dossierId = :dossierId AND " +
-            "t.defaultChargeAccount IS NOT NULL AND " +
-            "t.tvaAccount IS NOT NULL")
+            "((t.defaultChargeAccount IS NOT NULL AND t.tvaAccount IS NOT NULL) OR " +
+            "(t.defaultChargeAccount2 IS NOT NULL AND t.tvaAccount2 IS NOT NULL))")
     long countWithAccountingConfiguration(@Param("dossierId") Long dossierId);
 
     @Query("SELECT COUNT(t) FROM Tier t WHERE t.dossierId = :dossierId AND (" +
-            "t.defaultChargeAccount IS NULL OR " +
-            "t.tvaAccount IS NULL)")
+            "(t.defaultChargeAccount IS NULL OR t.tvaAccount IS NULL) AND " +
+            "(t.defaultChargeAccount2 IS NULL OR t.tvaAccount2 IS NULL))")
     long countWithoutAccountingConfiguration(@Param("dossierId") Long dossierId);
 
     // ===================== FILTRES IDENTIFIANTS FISCAUX =====================

@@ -91,6 +91,23 @@ public class AccountController {
         }
     }
 
+    @GetMapping("/by-ice/{ice}")
+    @RequireRole({UserRole.ADMIN, UserRole.COMPTABLE})
+    public ResponseEntity<?> getAccountByIce(@PathVariable String ice) {
+        log.debug("tierNumberGET /api/accounting/accounts/by-ice/{}", ice);
+
+        Optional<AccountDto> accountOpt = accountService.getAccountByIce(ice);
+
+        if (accountOpt.isPresent()) {
+            return ResponseEntity.ok(Map.of("account", accountOpt.get()));
+        } else {
+            Map<String, Object> errorResponse = Map.of(
+                    "error", "Compte non trouvé avec l'ICE: " + ice
+            );
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorResponse);
+        }
+    }
+
     @GetMapping
     @RequireRole({UserRole.ADMIN, UserRole.COMPTABLE})
     public ResponseEntity<Map<String, Object>> getAllAccounts(

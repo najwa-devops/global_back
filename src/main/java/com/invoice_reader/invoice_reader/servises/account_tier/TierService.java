@@ -248,6 +248,7 @@ public class TierService {
                 .dossier(dossier)
                 .auxiliaireMode(request.getAuxiliaireMode())
                 .tierNumber(request.getTierNumber())
+                .codeTier(request.getCodeTier())
                 .collectifAccount(request.getCollectifAccount())
                 .libelle(request.getLibelle())
                 .activity(request.getActivity())
@@ -255,8 +256,11 @@ public class TierService {
                 .ice(request.getIce())
                 .rcNumber(request.getRcNumber())
                 .defaultChargeAccount(request.getDefaultChargeAccount())
+                .defaultChargeAccount2(request.getDefaultChargeAccount2())
                 .tvaAccount(request.getTvaAccount())
+                .tvaAccount2(request.getTvaAccount2())
                 .defaultTvaRate(request.getDefaultTvaRate())
+                .defaultTvaRate2(request.getDefaultTvaRate2())
                 .active(request.getActive() != null ? request.getActive() : true)
                 .createdBy(request.getCreatedBy())
                 .build();
@@ -265,6 +269,9 @@ public class TierService {
     private void updateTierFields(Tier tier, UpdateTierRequest request) {
         if (request.getTierNumber() != null) {
             tier.setTierNumber(request.getTierNumber());
+        }
+        if (request.getCodeTier() != null) {
+            tier.setCodeTier(request.getCodeTier());
         }
         if (request.getCollectifAccount() != null) {
             tier.setCollectifAccount(request.getCollectifAccount());
@@ -287,11 +294,20 @@ public class TierService {
         if (request.getDefaultChargeAccount() != null) {
             tier.setDefaultChargeAccount(request.getDefaultChargeAccount());
         }
+        if (request.getDefaultChargeAccount2() != null) {
+            tier.setDefaultChargeAccount2(request.getDefaultChargeAccount2());
+        }
         if (request.getTvaAccount() != null) {
             tier.setTvaAccount(request.getTvaAccount());
         }
+        if (request.getTvaAccount2() != null) {
+            tier.setTvaAccount2(request.getTvaAccount2());
+        }
         if (request.getDefaultTvaRate() != null) {
             tier.setDefaultTvaRate(request.getDefaultTvaRate());
+        }
+        if (request.getDefaultTvaRate2() != null) {
+            tier.setDefaultTvaRate2(request.getDefaultTvaRate2());
         }
         if (request.getActive() != null) {
             tier.setActive(request.getActive());
@@ -303,6 +319,7 @@ public class TierService {
 
     private void normalizeCreateRequest(CreateTierRequest request) {
         request.setTierNumber(normalizeCode(request.getTierNumber()));
+        request.setCodeTier(normalizeText(request.getCodeTier()));
         request.setCollectifAccount(normalizeCode(request.getCollectifAccount()));
         request.setLibelle(normalizeText(request.getLibelle()));
         request.setActivity(normalizeText(request.getActivity()));
@@ -310,12 +327,15 @@ public class TierService {
         request.setIce(normalizeIdentifier(request.getIce()));
         request.setRcNumber(normalizeIdentifier(request.getRcNumber()));
         request.setDefaultChargeAccount(normalizeCode(request.getDefaultChargeAccount()));
+        request.setDefaultChargeAccount2(normalizeCode(request.getDefaultChargeAccount2()));
         request.setTvaAccount(normalizeCode(request.getTvaAccount()));
+        request.setTvaAccount2(normalizeCode(request.getTvaAccount2()));
         request.setCreatedBy(normalizeText(request.getCreatedBy()));
     }
 
     private void normalizeUpdateRequest(UpdateTierRequest request) {
         request.setTierNumber(normalizeCode(request.getTierNumber()));
+        request.setCodeTier(normalizeText(request.getCodeTier()));
         request.setCollectifAccount(normalizeCode(request.getCollectifAccount()));
         request.setLibelle(normalizeText(request.getLibelle()));
         request.setActivity(normalizeText(request.getActivity()));
@@ -323,7 +343,9 @@ public class TierService {
         request.setIce(normalizeIdentifier(request.getIce()));
         request.setRcNumber(normalizeIdentifier(request.getRcNumber()));
         request.setDefaultChargeAccount(normalizeCode(request.getDefaultChargeAccount()));
+        request.setDefaultChargeAccount2(normalizeCode(request.getDefaultChargeAccount2()));
         request.setTvaAccount(normalizeCode(request.getTvaAccount()));
+        request.setTvaAccount2(normalizeCode(request.getTvaAccount2()));
         request.setUpdatedBy(normalizeText(request.getUpdatedBy()));
     }
 

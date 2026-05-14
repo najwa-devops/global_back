@@ -253,13 +253,13 @@ public class DynamicTemplate {
      * Récupère le compte de charge depuis le Tier
      */
     public String getChargeAccount() {
-        return tier != null ? tier.getDefaultChargeAccount() : null;
+        return tier != null ? tier.getEffectiveChargeAccount() : null;
     }
 
     /**
      * Récupère le compte TVA depuis le Tier
      */
     public String getTvaAccount() {
-        return tier != null ? tier.getTvaAccount() : null;
+        return tier != null ? tier.getEffectiveTvaAccount() : null;
     }
 }

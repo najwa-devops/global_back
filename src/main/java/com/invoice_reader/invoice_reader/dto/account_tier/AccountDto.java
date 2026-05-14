@@ -38,6 +38,7 @@ public class AccountDto {
     private String rc;
     private String rib;
     private String tva;
+    private String taxCode;
     private String charge;
 
     // Flags de type de compte
@@ -84,6 +85,7 @@ public class AccountDto {
                 .rc(entity.getRc())
                 .rib(entity.getRib())
                 .tva(entity.getTva())
+                .taxCode(entity.getTaxCode())
                 .charge(entity.getCharge())
                 .isFournisseurAccount(entity.isFournisseurAccount())
                 .isChargeAccount(entity.isChargeAccount())

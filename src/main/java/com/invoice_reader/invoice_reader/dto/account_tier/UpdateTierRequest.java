@@ -29,6 +29,12 @@ public class UpdateTierRequest {
     private String tierNumber;
 
     /**
+     * Code tier métier
+     */
+    @Size(max = 80, message = "Le code tier ne doit pas dépasser 80 caractères")
+    private String codeTier;
+
+    /**
      * Compte collectif (9 chiffres)
      * OPTIONNEL
      * Valeurs: "342100000" ou "441100000"
@@ -78,6 +84,10 @@ public class UpdateTierRequest {
             message = "Le compte de charge doit contenir exactement 9 chiffres")
     private String defaultChargeAccount;
 
+    @Pattern(regexp = "^\\d{9}$|^$",
+            message = "Le compte de charge doit contenir exactement 9 chiffres")
+    private String defaultChargeAccount2;
+
     /**
      * Compte TVA (9 chiffres)
      * OPTIONNEL
@@ -86,6 +96,10 @@ public class UpdateTierRequest {
             message = "Le compte TVA doit contenir exactement 9 chiffres")
     private String tvaAccount;
 
+    @Pattern(regexp = "^\\d{9}$|^$",
+            message = "Le compte TVA doit contenir exactement 9 chiffres")
+    private String tvaAccount2;
+
     /**
      * Taux de TVA
      * OPTIONNEL
@@ -93,6 +107,10 @@ public class UpdateTierRequest {
     @Min(value = 0, message = "Le taux de TVA doit être positif")
     @Max(value = 100, message = "Le taux de TVA ne peut pas dépasser 100%")
     private Double defaultTvaRate;
+
+    @Min(value = 0, message = "Le taux de TVA doit être positif")
+    @Max(value = 100, message = "Le taux de TVA ne peut pas dépasser 100%")
+    private Double defaultTvaRate2;
 
     /**
      * Statut actif
@@ -106,13 +124,17 @@ public class UpdateTierRequest {
     private String updatedBy;
 
     public void validate() {
-        boolean hasTvaAccount = tvaAccount != null && !tvaAccount.isBlank();
-        boolean hasTvaRate = defaultTvaRate != null;
+        validatePair(tvaAccount, defaultTvaRate, "1");
+        validatePair(tvaAccount2, defaultTvaRate2, "2");
+    }
 
-        // Si un seul des deux fourni → ERREUR
-        if (hasTvaAccount != hasTvaRate) {
+    private void validatePair(String account, Double rate, String suffix) {
+        boolean hasAccount = account != null && !account.isBlank();
+        boolean hasRate = rate != null;
+
+        if (hasAccount != hasRate) {
             throw new IllegalArgumentException(
-                    "Le compte TVA et le taux TVA doivent être modifiés ENSEMBLE. " +
+                    "Le compte TVA " + suffix + " et le taux TVA doivent être modifiés ENSEMBLE. " +
                             "Fournissez les deux ou aucun des deux."
             );
         }

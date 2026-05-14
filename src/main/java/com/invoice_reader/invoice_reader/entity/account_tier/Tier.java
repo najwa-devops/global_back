@@ -26,7 +26,9 @@ import java.time.LocalDateTime;
  *   - tierNumber: TOUJOURS 9 chiffres
  *   - collectifAccount: 9 chiffres si mode auxiliaire activé
  *   - defaultChargeAccount: 9 chiffres
+ *   - defaultChargeAccount2: 9 chiffres
  *   - tvaAccount: 9 chiffres
+ *   - tvaAccount2: 9 chiffres
  */
 @Entity
 @Table(name = "tiers",
@@ -70,6 +72,9 @@ public class Tier {
 
     @Column(name = "tier_number", nullable = false, length = 31)
     private String tierNumber;
+
+    @Column(name = "code_tier", length = 80)
+    private String codeTier;
 
     @Column(name = "collectif_account", length = 9)
     private String collectifAccount;
@@ -119,6 +124,9 @@ public class Tier {
     @Column(name = "default_charge_account", length = 9)
     private String defaultChargeAccount;
 
+    @Column(name = "default_charge_account_2", length = 9)
+    private String defaultChargeAccount2;
+
     /**
      * Compte TVA récupérable (classe 3455)
      * Format: EXACTEMENT 9 chiffres
@@ -127,12 +135,18 @@ public class Tier {
     @Column(name = "tva_account", length = 9)
     private String tvaAccount;
 
+    @Column(name = "tva_account_2", length = 9)
+    private String tvaAccount2;
+
     /**
      * Taux de TVA par défaut (en pourcentage)
      * Exemple: 20.0, 10.0, 14.0
      */
     @Column(name = "default_tva_rate")
     private Double defaultTvaRate;
+
+    @Column(name = "default_tva_rate_2")
+    private Double defaultTvaRate2;
 
     // ===================== STATUT ET AUDIT =====================
 
@@ -193,7 +207,10 @@ public class Tier {
         this.ice = normalizeOptionalCode(this.ice);
         this.ifNumber = normalizeOptionalCode(this.ifNumber);
         this.rcNumber = normalizeOptionalCode(this.rcNumber);
+        this.codeTier = normalizeOptionalCode(this.codeTier);
         this.collectifAccount = normalizeOptionalCode(this.collectifAccount);
+        this.defaultChargeAccount2 = normalizeOptionalCode(this.defaultChargeAccount2);
+        this.tvaAccount2 = normalizeOptionalCode(this.tvaAccount2);
 
         if (this.tierNumber != null) {
             this.tierNumber = this.tierNumber.replaceAll("\\s+", "").trim().toUpperCase();
@@ -227,6 +244,12 @@ public class Tier {
         // tierNumber toujours obligatoire
         if (this.tierNumber == null || this.tierNumber.isBlank()) {
             throw new IllegalStateException("Le numéro de tier est obligatoire");
+        }
+
+        if (Boolean.TRUE.equals(this.auxiliaireMode)) {
+            if (this.codeTier == null || this.codeTier.isBlank()) {
+                throw new IllegalStateException("Mode auxiliaire activé: le code tier est obligatoire");
+            }
         }
 
         if (this.tierNumber.length() > 31) {  // Limite max définie dans @Column
@@ -278,15 +301,16 @@ public class Tier {
      * Vérifie si le tier a une configuration comptable complète
      */
     public boolean hasAccountingConfiguration() {
-        return this.defaultChargeAccount != null && !this.defaultChargeAccount.isBlank()
-                && this.tvaAccount != null && !this.tvaAccount.isBlank();
+        return hasAccountingPair(this.defaultChargeAccount, this.tvaAccount)
+                || hasAccountingPair(this.defaultChargeAccount2, this.tvaAccount2);
     }
 
     /**
      * Vérifie si le tier a une configuration comptable COMPLÈTE
      */
     public boolean hasFullAccountingConfiguration() {
-        return hasAccountingConfiguration() && this.defaultTvaRate != null;
+        return hasAccountingConfiguration()
+                && (this.defaultTvaRate != null || this.defaultTvaRate2 != null);
     }
 
     /**
@@ -296,10 +320,25 @@ public class Tier {
         if (!hasAccountingConfiguration()) {
             return "Non configuré";
         }
-        return String.format("Charge: %s | TVA: %s | Taux: %.1f%%",
-                this.defaultChargeAccount,
-                this.tvaAccount,
-                this.defaultTvaRate != null ? this.defaultTvaRate : 0.0);
+        StringBuilder sb = new StringBuilder();
+        if (hasAccountingPair(this.defaultChargeAccount, this.tvaAccount)) {
+            sb.append(String.format("HT1: %s | TVA1: %s",
+                    this.defaultChargeAccount, this.tvaAccount));
+            if (this.defaultTvaRate != null) {
+                sb.append(String.format(" | Taux1: %.1f%%", this.defaultTvaRate));
+            }
+        }
+        if (hasAccountingPair(this.defaultChargeAccount2, this.tvaAccount2)) {
+            if (sb.length() > 0) {
+                sb.append(" || ");
+            }
+            sb.append(String.format("HT2: %s | TVA2: %s",
+                    this.defaultChargeAccount2, this.tvaAccount2));
+            if (this.defaultTvaRate2 != null) {
+                sb.append(String.format(" | Taux2: %.1f%%", this.defaultTvaRate2));
+            }
+        }
+        return sb.toString();
     }
 
     /**
@@ -327,8 +366,16 @@ public class Tier {
             valid = valid && this.defaultChargeAccount.matches("^\\d{9}$");
         }
 
+        if (this.defaultChargeAccount2 != null && !this.defaultChargeAccount2.isBlank()) {
+            valid = valid && this.defaultChargeAccount2.matches("^\\d{9}$");
+        }
+
         if (this.tvaAccount != null && !this.tvaAccount.isBlank()) {
             valid = valid && this.tvaAccount.matches("^\\d{9}$");
+        }
+
+        if (this.tvaAccount2 != null && !this.tvaAccount2.isBlank()) {
+            valid = valid && this.tvaAccount2.matches("^\\d{9}$");
         }
 
         return valid;
@@ -361,18 +408,44 @@ public class Tier {
     }
 
     public boolean hasTvaConfiguration() {
-        boolean hasAccount = tvaAccount != null && !tvaAccount.isBlank();
-        boolean hasRate = defaultTvaRate != null;
-
-        // Les deux doivent être présents
-        return hasAccount && hasRate;
+        return (tvaAccount != null && !tvaAccount.isBlank() && defaultTvaRate != null)
+                || (tvaAccount2 != null && !tvaAccount2.isBlank() && defaultTvaRate2 != null);
     }
 
     public String getTvaDisplayFormat() {
         if (!hasTvaConfiguration()) {
             return "Aucune TVA configurée";
         }
-        return String.format("%s (TVA %.0f%%)", tvaAccount, defaultTvaRate);
+        if (tvaAccount != null && !tvaAccount.isBlank() && defaultTvaRate != null) {
+            return String.format("%s (TVA %.0f%%)", tvaAccount, defaultTvaRate);
+        }
+        return String.format("%s (TVA %.0f%%)", tvaAccount2, defaultTvaRate2);
+    }
+
+    public String getEffectiveChargeAccount() {
+        if (defaultChargeAccount != null && !defaultChargeAccount.isBlank()) {
+            return defaultChargeAccount;
+        }
+        return defaultChargeAccount2;
+    }
+
+    public String getEffectiveTvaAccount() {
+        if (tvaAccount != null && !tvaAccount.isBlank()) {
+            return tvaAccount;
+        }
+        return tvaAccount2;
+    }
+
+    public Double getEffectiveTvaRate() {
+        if (defaultTvaRate != null) {
+            return defaultTvaRate;
+        }
+        return defaultTvaRate2;
+    }
+
+    private boolean hasAccountingPair(String chargeAccount, String tvaAccount) {
+        return chargeAccount != null && !chargeAccount.isBlank()
+                && tvaAccount != null && !tvaAccount.isBlank();
     }
 }
 

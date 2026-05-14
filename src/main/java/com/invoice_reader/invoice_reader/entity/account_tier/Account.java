@@ -44,6 +44,9 @@ public class Account {
     @Column(name = "taux")
     private Double tvaRate;
 
+    @Column(name = "code_taxe", length = 20)
+    private String taxCode;
+
     @Builder.Default
     @Column(name = "liv", nullable = false)
     private Boolean active = true;
@@ -170,7 +173,10 @@ public class Account {
     }
 
     public boolean isTvaAccount() {
-        return classe != null && classe == 3 && code != null && code.startsWith("3455");
+        return classe != null
+                && classe == 3
+                && code != null
+                && (code.startsWith("3455") || code.startsWith("4455"));
     }
 
     public boolean hasTvaRate() {

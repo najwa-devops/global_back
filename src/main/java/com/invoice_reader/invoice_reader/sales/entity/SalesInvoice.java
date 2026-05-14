@@ -352,15 +352,15 @@ public class SalesInvoice {
     }
 
     public String getChargeAccount() {
-        return tier != null ? tier.getDefaultChargeAccount() : null;
+        return tier != null ? tier.getEffectiveChargeAccount() : null;
     }
 
     public String getTvaAccount() {
-        return tier != null ? tier.getTvaAccount() : null;
+        return tier != null ? tier.getEffectiveTvaAccount() : null;
     }
 
     public Double getDefaultTvaRate() {
-        return tier != null ? tier.getDefaultTvaRate() : null;
+        return tier != null ? tier.getEffectiveTvaRate() : null;
     }
 
     public boolean hasTierAccountingConfig() {

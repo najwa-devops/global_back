@@ -39,6 +39,11 @@ public class TierDto {
     private String tierNumber;
 
     /**
+     * Code tier métier
+     */
+    private String codeTier;
+
+    /**
      * Compte collectif (si mode auxiliaire)
      * 9 chiffres: "342100000" ou "441100000"
      */
@@ -74,16 +79,19 @@ public class TierDto {
      * Compte de charge par défaut (9 chiffres)
      */
     private String defaultChargeAccount;
+    private String defaultChargeAccount2;
 
     /**
      * Compte TVA (9 chiffres)
      */
     private String tvaAccount;
+    private String tvaAccount2;
 
     /**
      * Taux de TVA par défaut
      */
     private Double defaultTvaRate;
+    private Double defaultTvaRate2;
 
     /**
      * A une configuration comptable complète ?
@@ -125,6 +133,7 @@ public class TierDto {
                 // Mode auxiliaire
                 .auxiliaireMode(tier.getAuxiliaireMode())
                 .tierNumber(tier.getTierNumber())
+                .codeTier(tier.getCodeTier())
                 .collectifAccount(tier.getCollectifAccount())
                 .displayAccount(tier.getDisplayAccount())
 
@@ -137,8 +146,11 @@ public class TierDto {
 
                 // Configuration comptable
                 .defaultChargeAccount(tier.getDefaultChargeAccount())
+                .defaultChargeAccount2(tier.getDefaultChargeAccount2())
                 .tvaAccount(tier.getTvaAccount())
+                .tvaAccount2(tier.getTvaAccount2())
                 .defaultTvaRate(tier.getDefaultTvaRate())
+                .defaultTvaRate2(tier.getDefaultTvaRate2())
                 .tvaDisplayFormat(tier.getTvaDisplayFormat())
                 .hasTvaConfiguration(tier.hasTvaConfiguration())
                 .hasAccountingConfig(tier.hasAccountingConfiguration())
@@ -172,5 +184,33 @@ public class TierDto {
                 "Tier[id=%d, libelle='%s', tierNumber='%s', IF='%s', ICE='%s', tva='%s']",
                 id, libelle, tierNumber, ifNumber, ice, tvaDisplayFormat
         );
+    }
+
+    public boolean hasAccountingConfiguration() {
+        return (defaultChargeAccount != null && !defaultChargeAccount.isBlank()
+                && tvaAccount != null && !tvaAccount.isBlank())
+                || (defaultChargeAccount2 != null && !defaultChargeAccount2.isBlank()
+                && tvaAccount2 != null && !tvaAccount2.isBlank());
+    }
+
+    public String getEffectiveChargeAccount() {
+        if (defaultChargeAccount != null && !defaultChargeAccount.isBlank()) {
+            return defaultChargeAccount;
+        }
+        return defaultChargeAccount2;
+    }
+
+    public String getEffectiveTvaAccount() {
+        if (tvaAccount != null && !tvaAccount.isBlank()) {
+            return tvaAccount;
+        }
+        return tvaAccount2;
+    }
+
+    public Double getEffectiveTvaRate() {
+        if (defaultTvaRate != null) {
+            return defaultTvaRate;
+        }
+        return defaultTvaRate2;
     }
 }
